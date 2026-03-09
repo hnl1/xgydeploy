@@ -65,7 +65,6 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 	return data, nil
 }
 
-// ListInstances 实际返回：{code, data: {list: []Instance}, success}，list 在 data.data.list
 func (c *Client) ListInstances() ([]map[string]any, error) {
 	data, err := c.request("GET", "/open/instances", nil)
 	if err != nil {
@@ -75,7 +74,6 @@ func (c *Client) ListInstances() ([]map[string]any, error) {
 		log.Printf("[xgc] ListInstances 响应为空")
 		return []map[string]any{}, nil
 	}
-	// 兼容 data.list（文档）和 data.data.list（实际 API）
 	inner, _ := data["data"].(map[string]any)
 	if inner == nil {
 		inner = data
@@ -98,6 +96,51 @@ func (c *Client) ListInstances() ([]map[string]any, error) {
 	return result, nil
 }
 
+func (c *Client) GetBalance() (float64, error) {
+	data, err := c.request("GET", "/open/balance", nil)
+	if err != nil {
+		return 0, err
+	}
+	if data == nil {
+		return 0, nil
+	}
+	inner, _ := data["data"].(map[string]any)
+	if inner == nil {
+		inner = data
+	}
+	balance, _ := inner["balance"].(float64)
+	return balance, nil
+}
+
+// ListImages 返回私有镜像列表，用于 image_id → name 映射。
+func (c *Client) ListImages() (map[string]string, error) {
+	data, err := c.request("GET", "/open/images", nil)
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return map[string]string{}, nil
+	}
+	inner, _ := data["data"].(map[string]any)
+	if inner == nil {
+		inner = data
+	}
+	list, _ := inner["list"].([]any)
+	result := make(map[string]string, len(list))
+	for _, v := range list {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := m["id"].(string)
+		name, _ := m["name"].(string)
+		if id != "" && name != "" {
+			result[id] = name
+		}
+	}
+	return result, nil
+}
+
 type DeployOpts struct {
 	Image        string
 	ImageType    string // public | private
@@ -108,21 +151,20 @@ type DeployOpts struct {
 
 func (c *Client) Deploy(opts DeployOpts) (string, error) {
 	body := map[string]any{
-		"image":                  opts.Image,
-		"gpu_model":              opts.GPUModel,
-		"gpu_count":              opts.GPUCount,
-		"data_center_id":        opts.DataCenterID,
-		"image_type":             opts.ImageType,
-		"storage":                false,
-		"storage_mount_path":     "/root/cloud",
-		"system_disk_expand":     false,
+		"image":                   opts.Image,
+		"gpu_model":               opts.GPUModel,
+		"gpu_count":               opts.GPUCount,
+		"data_center_id":          opts.DataCenterID,
+		"image_type":              opts.ImageType,
+		"storage":                 false,
+		"storage_mount_path":      "/root/cloud",
+		"system_disk_expand":      false,
 		"system_disk_expand_size": 0,
 	}
 	data, err := c.request("POST", "/open/instance/deploy", body)
 	if err != nil {
 		return "", err
 	}
-	// 实际返回与 instances 一致：{code, data: {id: string}, success}，id 可能在 data.data.id
 	inner, _ := data["data"].(map[string]any)
 	if inner == nil {
 		inner = data
@@ -177,7 +219,6 @@ func (c *Client) WaitForRunning(instanceIDs []string, pollInterval, timeout time
 		}
 		time.Sleep(pollInterval)
 	}
-	// 超时：返回当前已 running 的
 	all, _ := c.ListInstances()
 	var result []string
 	for _, inst := range all {
@@ -193,23 +234,42 @@ func (c *Client) WaitForRunning(instanceIDs []string, pollInterval, timeout time
 	return result
 }
 
-// DeployAsync 串行创建，避免并发触发 API 限流
+const maxConcurrentDeploy = 3
+
 func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
+	if count <= 0 {
+		return nil, nil
+	}
+	var mu sync.Mutex
 	var created []string
 	var errs []error
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentDeploy)
+
 	for i := 0; i < count; i++ {
-		id, err := c.Deploy(opts)
-		if err != nil {
-			errs = append(errs, err)
-			log.Printf("[xgc] 创建实例 %d/%d 失败: %v", i+1, count, err)
-		} else if id != "" {
-			created = append(created, id)
-			log.Printf("[xgc] 创建实例 %d/%d 成功: %s", i+1, count, id)
-		} else {
-			errs = append(errs, fmt.Errorf("deploy 响应缺少 id"))
-			log.Printf("[xgc] 创建实例 %d/%d 失败: 响应为空 id", i+1, count)
-		}
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			id, err := c.Deploy(opts)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				log.Printf("[xgc] 创建实例 %d/%d 失败: %v", i+1, count, err)
+			} else if id != "" {
+				created = append(created, id)
+				log.Printf("[xgc] 创建实例 %d/%d 成功: %s", i+1, count, id)
+			} else {
+				errs = append(errs, fmt.Errorf("deploy 响应缺少 id"))
+				log.Printf("[xgc] 创建实例 %d/%d 失败: 响应为空 id", i+1, count)
+			}
+		}()
 	}
+	wg.Wait()
 	return created, errs
 }
 

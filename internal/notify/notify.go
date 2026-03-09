@@ -28,22 +28,57 @@ func formatRule(rule config.ScheduleRule) string {
 	return ""
 }
 
-func buildMessage(results []scheduler.ActionResult, timeStr string) string {
+func formatBalance(balance float64) string {
+	return fmt.Sprintf("💰 账户余额：%.2f 元\n", balance)
+}
+
+func buildPlanMessage(plans []scheduler.ActionPlan, timeStr string, balance float64) string {
+	var sb strings.Builder
+	sb.WriteString("## 【仙宫云调度】准备执行\n\n")
+	sb.WriteString("⏰ 时间：" + timeStr + "\n\n")
+	sb.WriteString(formatBalance(balance) + "\n")
+
+	for _, p := range plans {
+		target := formatRule(p.Rule)
+		sb.WriteString(fmt.Sprintf("### %s\n", p.ConfigKey))
+		sb.WriteString(fmt.Sprintf("- 规则：%s %s\n", p.Rule.Time, target))
+		sb.WriteString(fmt.Sprintf("- 当前实例：%d 个\n", p.Current))
+
+		switch p.Action {
+		case "create":
+			if p.Count > 0 {
+				sb.WriteString(fmt.Sprintf("- 📥 计划创建：%d 个\n", p.Count))
+			} else {
+				sb.WriteString("- ✅ 无需操作，已满足要求\n")
+			}
+		case "destroy":
+			if p.Count > 0 {
+				sb.WriteString(fmt.Sprintf("- 📤 计划销毁：%d 个\n", p.Count))
+				for _, id := range p.DestroyIDs {
+					sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
+				}
+			} else {
+				sb.WriteString("- ✅ 无需操作，已满足要求\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func buildResultMessage(results []scheduler.ActionResult, timeStr string, balance float64) string {
 	var sb strings.Builder
 	sb.WriteString("## 【仙宫云调度】执行完成\n\n")
 	sb.WriteString("⏰ 执行时间：" + timeStr + "\n\n")
+	sb.WriteString(formatBalance(balance) + "\n")
+
 	for _, r := range results {
 		target := formatRule(r.Rule)
 		status := "✅ 成功"
 		if !r.Success {
 			status = "❌ 失败"
 		}
-		sb.WriteString(fmt.Sprintf("### 配置 %s | %s\n", r.ConfigKey, status))
-		imgShort := r.ImageID
-		if len(imgShort) > 8 {
-			imgShort = imgShort[:8] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("- 镜像：`%s`\n", imgShort))
+		sb.WriteString(fmt.Sprintf("### %s | %s\n", r.ConfigKey, status))
 		sb.WriteString(fmt.Sprintf("- 规则：%s %s\n", r.Rule.Time, target))
 		sb.WriteString(fmt.Sprintf("- 操作前：%d 个\n", r.BeforeCount))
 		sb.WriteString(fmt.Sprintf("- 操作后：%d 个\n", r.AfterCount))
@@ -67,7 +102,7 @@ func buildMessage(results []scheduler.ActionResult, timeStr string) string {
 	return sb.String()
 }
 
-func SendDingtalk(results []scheduler.ActionResult, timeStr string) bool {
+func sendDingtalk(title, text string) bool {
 	webhook := os.Getenv("DINGTALK_WEBHOOK")
 	if webhook == "" {
 		return false
@@ -79,11 +114,10 @@ func SendDingtalk(results []scheduler.ActionResult, timeStr string) bool {
 			return false
 		}
 	}
-	text := buildMessage(results, timeStr)
 	payload := map[string]any{
 		"msgtype": "markdown",
 		"markdown": map[string]string{
-			"title": "仙宫云调度",
+			"title": title,
 			"text":  text,
 		},
 	}
@@ -96,7 +130,14 @@ func SendDingtalk(results []scheduler.ActionResult, timeStr string) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
-// signWebhookURL 钉钉 webhook 加签：timestamp + "\n" + secret，HMAC-SHA256，Base64，URL 编码
+func SendPlanDingtalk(plans []scheduler.ActionPlan, timeStr string, balance float64) bool {
+	return sendDingtalk("仙宫云调度 - 准备执行", buildPlanMessage(plans, timeStr, balance))
+}
+
+func SendResultDingtalk(results []scheduler.ActionResult, timeStr string, balance float64) bool {
+	return sendDingtalk("仙宫云调度 - 执行完成", buildResultMessage(results, timeStr, balance))
+}
+
 func signWebhookURL(webhook, secret string) (string, error) {
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	stringToSign := timestamp + "\n" + secret

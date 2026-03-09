@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hnl1/xgydeploy/internal/config"
@@ -19,9 +20,22 @@ var countedStatuses = map[string]bool{
 	"shutdown":      true,
 }
 
+type ActionPlan struct {
+	ConfigKey  string
+	ImageID    string
+	ImageName  string
+	Rule       config.ScheduleRule
+	Current    int
+	Action     string // "create" | "destroy"
+	Count      int
+	DestroyIDs []string
+	DeployOpts xgc.DeployOpts
+}
+
 type ActionResult struct {
 	ConfigKey   string
 	ImageID     string
+	ImageName   string
 	Rule        config.ScheduleRule
 	BeforeCount int
 	AfterCount  int
@@ -31,7 +45,7 @@ type ActionResult struct {
 	Error       string
 }
 
-func Run(client *xgc.Client, configs []config.ConfigItem, timezone string, now time.Time) []ActionResult {
+func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now time.Time) ([]ActionPlan, error) {
 	tz, err := time.LoadLocation(timezone)
 	if err != nil {
 		tz = time.FixedZone("CST", 8*3600)
@@ -42,28 +56,139 @@ func Run(client *xgc.Client, configs []config.ConfigItem, timezone string, now t
 
 	instances, err := client.ListInstances()
 	if err != nil {
-		log.Printf("[scheduler] 获取实例列表失败: %v", err)
-		return []ActionResult{{Success: false, Error: err.Error()}}
+		return nil, err
 	}
 	log.Printf("[scheduler] 获取实例列表完成，共 %d 个", len(instances))
 
-	var results []ActionResult
+	imageNames, err := client.ListImages()
+	if err != nil {
+		log.Printf("[scheduler] 获取镜像列表失败，将使用镜像 ID: %v", err)
+		imageNames = map[string]string{}
+	}
+
+	var plans []ActionPlan
 	for _, cfg := range configs {
 		rule := findMatchingRule(cfg, now, tz)
 		if rule == nil {
 			continue
 		}
 		mine := filterInstances(instances, cfg.ImageID)
-		configKey := truncateConfigKey(cfg.ImageID)
+		imageName := imageNames[cfg.ImageID]
+		configKey := imageName
+		if configKey == "" {
+			configKey = truncateConfigKey(cfg.ImageID)
+		}
 		log.Printf("[scheduler] 配置 %s 匹配规则 %s，当前实例数 %d", configKey, rule.Time, len(mine))
 
-		if rule.MinCount != nil {
-			results = append(results, applyMinCount(client, cfg, *rule, mine, configKey, now))
-		} else if rule.MaxCount != nil {
-			results = append(results, applyMaxCount(client, cfg, *rule, mine, configKey))
+		plan := ActionPlan{
+			ConfigKey: configKey,
+			ImageID:   cfg.ImageID,
+			ImageName: imageName,
+			Rule:      *rule,
+			Current:   len(mine),
 		}
+
+		if rule.MinCount != nil {
+			toCreate := *rule.MinCount - len(mine)
+			if toCreate < 0 {
+				toCreate = 0
+			}
+			plan.Action = "create"
+			plan.Count = toCreate
+			plan.DeployOpts = xgc.DeployOpts{
+				Image:        cfg.ImageID,
+				ImageType:    cfg.ImageType,
+				GPUModel:     cfg.GPUModel,
+				GPUCount:     cfg.GPUCount,
+				DataCenterID: cfg.DataCenterID,
+			}
+		} else if rule.MaxCount != nil {
+			toDestroy := len(mine) - *rule.MaxCount
+			if toDestroy < 0 {
+				toDestroy = 0
+			}
+			plan.Action = "destroy"
+			plan.Count = toDestroy
+			plan.DestroyIDs = pickOldestInstanceIDs(mine, toDestroy)
+		}
+
+		plans = append(plans, plan)
 	}
+	return plans, nil
+}
+
+func Execute(client *xgc.Client, plans []ActionPlan) []ActionResult {
+	results := make([]ActionResult, len(plans))
+	var wg sync.WaitGroup
+
+	for i, plan := range plans {
+		i, plan := i, plan
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch plan.Action {
+			case "create":
+				results[i] = executeCreate(client, plan)
+			case "destroy":
+				results[i] = executeDestroy(client, plan)
+			default:
+				results[i] = ActionResult{
+					ConfigKey:   plan.ConfigKey,
+					ImageID:     plan.ImageID,
+					ImageName:   plan.ImageName,
+					Rule:        plan.Rule,
+					BeforeCount: plan.Current,
+					AfterCount:  plan.Current,
+					Success:     true,
+				}
+			}
+		}()
+	}
+	wg.Wait()
 	return results
+}
+
+func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
+	log.Printf("[scheduler] 配置 %s 开始创建 %d 个实例", plan.ConfigKey, plan.Count)
+
+	created, errs := client.DeployAsync(plan.DeployOpts, plan.Count)
+
+	verified := created
+	if len(created) > 0 {
+		log.Printf("[scheduler] 配置 %s 等待 %d 个实例启动完成...", plan.ConfigKey, len(created))
+		verified = client.WaitForRunning(created, 15*time.Second, 5*time.Minute)
+		log.Printf("[scheduler] 配置 %s 已 running: %d/%d", plan.ConfigKey, len(verified), len(created))
+	}
+
+	return ActionResult{
+		ConfigKey:   plan.ConfigKey,
+		ImageID:     plan.ImageID,
+		ImageName:   plan.ImageName,
+		Rule:        plan.Rule,
+		BeforeCount: plan.Current,
+		AfterCount:  plan.Current + len(verified),
+		Created:     verified,
+		Success:     len(errs) == 0 && len(verified) == len(created),
+		Error:       firstErr(errs),
+	}
+}
+
+func executeDestroy(client *xgc.Client, plan ActionPlan) ActionResult {
+	log.Printf("[scheduler] 配置 %s 开始销毁 %d 个实例", plan.ConfigKey, plan.Count)
+
+	destroyed, errs := client.DestroyAsync(plan.DestroyIDs)
+
+	return ActionResult{
+		ConfigKey:   plan.ConfigKey,
+		ImageID:     plan.ImageID,
+		ImageName:   plan.ImageName,
+		Rule:        plan.Rule,
+		BeforeCount: plan.Current,
+		AfterCount:  plan.Current - len(destroyed),
+		Destroyed:   destroyed,
+		Success:     len(errs) == 0,
+		Error:       firstErr(errs),
+	}
 }
 
 func truncateConfigKey(imageID string) string {
@@ -71,66 +196,6 @@ func truncateConfigKey(imageID string) string {
 		return imageID[:8]
 	}
 	return imageID
-}
-
-func applyMinCount(client *xgc.Client, cfg config.ConfigItem, rule config.ScheduleRule, mine []map[string]any, configKey string, now time.Time) ActionResult {
-	beforeCount := len(mine)
-	toCreate := *rule.MinCount - beforeCount
-	if toCreate < 0 {
-		toCreate = 0
-	}
-	log.Printf("[scheduler] 配置 %s 创建实例: 目标 %d，当前 %d，需创建 %d", configKey, *rule.MinCount, beforeCount, toCreate)
-
-	created, errs := client.DeployAsync(xgc.DeployOpts{
-		Image:        cfg.ImageID,
-		ImageType:    cfg.ImageType,
-		GPUModel:     cfg.GPUModel,
-		GPUCount:     cfg.GPUCount,
-		DataCenterID: cfg.DataCenterID,
-	}, toCreate)
-
-	// 轮询直到实例完全启动（status=running）才算成功
-	verified := created
-	if len(created) > 0 {
-		log.Printf("[scheduler] 配置 %s 等待 %d 个实例启动完成...", configKey, len(created))
-		verified = client.WaitForRunning(created, 15*time.Second, 5*time.Minute)
-		log.Printf("[scheduler] 配置 %s 已 running: %d/%d", configKey, len(verified), len(created))
-	}
-	afterCount := beforeCount + len(verified)
-
-	return ActionResult{
-		ConfigKey:   configKey,
-		ImageID:     cfg.ImageID,
-		Rule:        rule,
-		BeforeCount: beforeCount,
-		AfterCount:  afterCount,
-		Created:     verified,
-		Success:     len(errs) == 0 && len(verified) == len(created),
-		Error:       firstErr(errs),
-	}
-}
-
-func applyMaxCount(client *xgc.Client, cfg config.ConfigItem, rule config.ScheduleRule, mine []map[string]any, configKey string) ActionResult {
-	beforeCount := len(mine)
-	toDestroyCount := beforeCount - *rule.MaxCount
-	if toDestroyCount < 0 {
-		toDestroyCount = 0
-	}
-	log.Printf("[scheduler] 配置 %s 销毁实例: 目标 %d，当前 %d，需销毁 %d", configKey, *rule.MaxCount, beforeCount, toDestroyCount)
-
-	toDestroy := pickOldestInstanceIDs(mine, toDestroyCount)
-	destroyed, errs := client.DestroyAsync(toDestroy)
-
-	return ActionResult{
-		ConfigKey:   configKey,
-		ImageID:     cfg.ImageID,
-		Rule:        rule,
-		BeforeCount: beforeCount,
-		AfterCount:  beforeCount - len(destroyed),
-		Destroyed:   destroyed,
-		Success:     len(errs) == 0,
-		Error:       firstErr(errs),
-	}
 }
 
 func pickOldestInstanceIDs(instances []map[string]any, n int) []string {
@@ -216,18 +281,14 @@ func findMatchingRule(cfg config.ConfigItem, now time.Time, tz *time.Location) *
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].min < rules[j].min })
 
-	// 时间段 [start, end) 左闭右开，取 start 对应的规则
 	for i := range rules {
 		start := rules[i].min
-		var end int
 		if i+1 < len(rules) {
-			end = rules[i+1].min
+			end := rules[i+1].min
 			if nowMinutes >= start && nowMinutes < end {
 				return &rules[i].r
 			}
 		} else {
-			// 最后一段跨日：[22:00, 次日 10:00)
-			end = rules[0].min + minutesPerDay
 			if nowMinutes >= start || nowMinutes < rules[0].min {
 				return &rules[i].r
 			}
