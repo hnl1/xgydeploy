@@ -138,6 +138,34 @@ func SendResultDingtalk(results []scheduler.ActionResult, timeStr string, balanc
 	return sendDingtalk("仙宫云调度 - 执行完成", buildResultMessage(results, timeStr, balance))
 }
 
+func SendConfigDingtalk(rawYAML string) bool {
+	content := "【仙宫云调度】当前配置\n\n" + rawYAML
+	webhook := os.Getenv("DINGTALK_WEBHOOK")
+	if webhook == "" {
+		return false
+	}
+	if secret := os.Getenv("DINGTALK_SECRET"); secret != "" {
+		var err error
+		webhook, err = signWebhookURL(webhook, secret)
+		if err != nil {
+			return false
+		}
+	}
+	payload := map[string]any{
+		"msgtype": "text",
+		"text": map[string]string{
+			"content": content,
+		},
+	}
+	body, _ := json.Marshal(payload)
+	resp, err := http.Post(webhook, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
 func signWebhookURL(webhook, secret string) (string, error) {
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	stringToSign := timestamp + "\n" + secret
