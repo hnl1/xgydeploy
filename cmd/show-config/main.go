@@ -12,7 +12,7 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	raw := config.RawYAML("")
+	raw := config.RawYAML()
 	if raw == "" {
 		fmt.Fprintln(os.Stderr, "错误: 未找到配置")
 		os.Exit(1)

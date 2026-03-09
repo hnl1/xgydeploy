@@ -28,13 +28,11 @@ type configFile struct {
 	Configs  []ConfigItem `yaml:"configs"`
 }
 
-func RawYAML(path string) string {
+func RawYAML() string {
 	if secret := os.Getenv("XGC_CONFIG"); secret != "" {
 		return secret
 	}
-	if path == "" {
-		path = os.Getenv("XGC_CONFIG_PATH")
-	}
+	path := os.Getenv("XGC_CONFIG_PATH")
 	if path == "" {
 		path = "configs/config.yaml"
 	}
@@ -45,7 +43,7 @@ func RawYAML(path string) string {
 	return string(data)
 }
 
-func Load(path string) (string, []ConfigItem, error) {
+func Load() (string, []ConfigItem, error) {
 	if secret := os.Getenv("XGC_CONFIG"); secret != "" {
 		log.Printf("[config] 从环境变量 XGC_CONFIG 加载配置")
 		var cfg configFile
@@ -54,9 +52,7 @@ func Load(path string) (string, []ConfigItem, error) {
 		}
 		return applyDefaults(cfg)
 	}
-	if path == "" {
-		path = os.Getenv("XGC_CONFIG_PATH")
-	}
+	path := os.Getenv("XGC_CONFIG_PATH")
 	if path == "" {
 		path = "configs/config.yaml"
 	}

@@ -16,7 +16,7 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	timezone, configs, err := config.Load("")
+	timezone, configs, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
 		os.Exit(1)
