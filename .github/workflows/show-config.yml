@@ -1,0 +1,44 @@
+# 手动触发：将当前 XGC_CONFIG 发送到钉钉，方便编辑前查看
+name: 查看配置
+
+on:
+  workflow_dispatch:
+
+jobs:
+  show-config:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 发送配置到钉钉
+        env:
+          XGC_CONFIG: ${{ secrets.XGC_CONFIG }}
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+        run: |
+          python3 << 'PYEOF'
+          import hashlib, hmac, base64, json, os, sys, time, urllib.parse, urllib.request
+
+          webhook = os.environ.get("DINGTALK_WEBHOOK", "")
+          if not webhook:
+              print("未配置 DINGTALK_WEBHOOK")
+              sys.exit(1)
+
+          secret = os.environ.get("DINGTALK_SECRET", "")
+          if secret:
+              timestamp = str(int(time.time() * 1000))
+              string_to_sign = f"{timestamp}\n{secret}"
+              sign = urllib.parse.quote(base64.b64encode(
+                  hmac.new(secret.encode(), string_to_sign.encode(), hashlib.sha256).digest()
+              ).decode())
+              sep = "&" if "?" in webhook else "?"
+              webhook += f"{sep}timestamp={timestamp}&sign={sign}"
+
+          config = os.environ.get("XGC_CONFIG", "(未配置)")
+          payload = json.dumps({
+              "msgtype": "text",
+              "text": {"content": f"【当前调度配置】\n\n{config}"}
+          }).encode()
+
+          req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json"})
+          resp = urllib.request.urlopen(req)
+          print(f"HTTP {resp.status} - 配置已发送到钉钉")
+          PYEOF

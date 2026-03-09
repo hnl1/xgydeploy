@@ -22,7 +22,7 @@ jobs:
       - name: 执行调度
         env:
           XGC_API_TOKEN: ${{ secrets.XGC_API_TOKEN }}
-          XGC_CONFIG: ${{ vars.XGC_CONFIG }}
+          XGC_CONFIG: ${{ secrets.XGC_CONFIG }}
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: go run ./cmd/xgydeploy

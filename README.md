@@ -55,16 +55,15 @@ configs:
 ### 方式一：GitHub Actions（推荐，无需自建服务器）
 
 1. **Fork 或创建仓库**（私有/公开均可）
-2. **配置 Secrets 和 Variables**（仓库 Settings → Secrets and variables → Actions）：
-   - **Secrets**（敏感信息）：
-     - `XGC_API_TOKEN`：仙宫云访问令牌
-     - `DINGTALK_WEBHOOK`：钉钉群机器人 Webhook URL（可选）
-     - `DINGTALK_SECRET`：钉钉机器人加签密钥（若启用加签则必填）
-   - **Variables**（可随时修改）：
-     - `XGC_CONFIG`：完整 YAML 配置（含镜像 ID、时间、数量等）
+2. **配置 Secrets**（仓库 Settings → Secrets and variables → Actions → Secrets）：
+   - `XGC_API_TOKEN`：仙宫云访问令牌
+   - `XGC_CONFIG`：完整 YAML 配置（含镜像 ID、时间、数量等）
+   - `DINGTALK_WEBHOOK`：钉钉群机器人 Webhook URL（可选）
+   - `DINGTALK_SECRET`：钉钉机器人加签密钥（若启用加签则必填）
 3. **定时运行**：工作流已配置为每天 10:00 和 22:00（北京时间）执行
+4. **查看配置**：手动触发「查看配置」workflow，将当前 `XGC_CONFIG` 发送到钉钉，方便编辑前查看
 
-**XGC_CONFIG 示例**（复制到 Variables 的 Value，多行粘贴即可）：
+**XGC_CONFIG 示例**（复制到 Secrets 的 Value，多行粘贴即可）：
 ```yaml
 timezone: "Asia/Shanghai"
 configs:
@@ -80,7 +79,11 @@ configs:
         max_count: 3
 ```
 
-当 `XGC_CONFIG` 存在时，程序优先使用它，不再读取 `config.yaml`。使用 Variables 而非 Secrets 存放配置，方便随时查看和修改。
+当 `XGC_CONFIG` 存在时，程序优先使用它，不再读取 `config.yaml`。编辑前可通过「查看配置」workflow 将当前配置发送到钉钉。也可用命令行更新：
+
+```bash
+gh secret set XGC_CONFIG < configs/config.local.yaml
+```
 
 ### 方式二：自有服务器 / 云函数
 
