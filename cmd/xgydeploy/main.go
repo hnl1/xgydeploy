@@ -22,7 +22,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	now := time.Now()
+	tz, err := time.LoadLocation(timezone)
+	if err != nil {
+		tz = time.UTC
+	}
+	now := time.Now().In(tz)
 	timeStr := now.Format("2006-01-02 15:04")
 
 	fmt.Printf("[%s] 开始调度 (时区: %s)\n", timeStr, timezone)

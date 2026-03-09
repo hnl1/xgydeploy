@@ -48,7 +48,7 @@ type ActionResult struct {
 func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now time.Time) ([]ActionPlan, error) {
 	tz, err := time.LoadLocation(timezone)
 	if err != nil {
-		tz = time.FixedZone("CST", 8*3600)
+		tz = time.UTC
 	}
 	if now.IsZero() {
 		now = time.Now().In(tz)
