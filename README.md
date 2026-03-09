@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **定时调度**：到点自动检查实例数量，创建或销毁以达到目标
+- **定时调度**：到点自动检查实例数量，创建或销毁以达到目标（规则按时间段生效，左闭右开）
 - **多配置**：支持多份配置，每份可指定不同镜像、时间与数量
 - **智能销毁**：多于目标时按创建时间排序，优先销毁最早创建的
 - **钉钉通知**：每次执行完成后发送详细报告
@@ -15,6 +15,7 @@
 timezone: "Asia/Shanghai"
 configs:
   - image_id: "你的镜像ID"
+    image_type: "private"   # 私有镜像填 private，公共镜像填 public（默认 private）
     gpu_model: "NVIDIA GeForce RTX 4090"
     gpu_count: 1
     data_center_id: 1
@@ -32,7 +33,21 @@ configs:
         max_count: 2
 ```
 
-**保密建议**：将完整配置放入 `XGC_CONFIG` 环境变量（GitHub Secrets），镜像 ID 等敏感信息不写入仓库。
+**时间段说明**：规则按时间段生效，左闭右开。例如 `10:00 min 6`、`22:00 max 3`：
+- `[10:00, 22:00)` 使用 min 6
+- `[22:00, 次日 10:00)` 使用 max 3
+
+## 配置加载说明
+
+程序按以下优先级加载配置：
+
+| 优先级 | 方式 | 适用场景 |
+|--------|------|----------|
+| 1 | `XGC_CONFIG` 环境变量（YAML 内容） | GitHub Actions 等无文件环境，Secrets 存配置 |
+| 2 | `XGC_CONFIG_PATH` 环境变量（文件路径） | 本地指定配置文件，如 `configs/config.local.yaml` |
+| 3 | 默认 `configs/config.yaml` | 无环境变量时 |
+
+`.env` 文件会在启动时自动加载，用于设置上述环境变量，不改变加载逻辑。
 
 ## 部署方式
 
@@ -43,6 +58,7 @@ configs:
    - `XGC_API_TOKEN`：仙宫云访问令牌
    - `XGC_CONFIG`：**完整 YAML 配置**（含镜像 ID、时间、数量等，保密不提交）
    - `DINGTALK_WEBHOOK`：钉钉群机器人 Webhook URL（可选）
+   - `DINGTALK_SECRET`：钉钉机器人加签密钥（若启用加签则必填）
 3. **定时运行**：工作流已配置为每天 10:00 和 22:00（北京时间）执行
 
 **XGC_CONFIG 示例**（复制到 Secrets 的 Value，多行粘贴即可）：
@@ -50,6 +66,7 @@ configs:
 timezone: "Asia/Shanghai"
 configs:
   - image_id: "你的镜像ID"
+    image_type: "private"
     gpu_model: "NVIDIA GeForce RTX 4090"
     gpu_count: 1
     data_center_id: 1
@@ -65,27 +82,41 @@ configs:
 ### 方式二：自有服务器 / 云函数
 
 ```bash
-go build -o xgydeploy .
-export XGC_API_TOKEN="你的令牌"
-export XGC_CONFIG="timezone: Asia/Shanghai
-configs:
-  - image_id: 你的镜像ID
-    schedules:
-      - time: \"10:00\"
-        min_count: 6
-      - time: \"22:00\"
-        max_count: 3"
-export DINGTALK_WEBHOOK="钉钉webhook"  # 可选
-./xgydeploy
-# 或用 cron 定时执行
+go run ./cmd/xgydeploy
 ```
+
+**本地试验推荐**：创建 `.env`（已加入 .gitignore）和 `configs/config.local.yaml`：
+
+```bash
+# .env
+XGC_API_TOKEN=你的令牌
+XGC_CONFIG_PATH=configs/config.local.yaml
+DINGTALK_WEBHOOK=钉钉webhook  # 可选
+DINGTALK_SECRET=SEC开头的加签密钥  # 若机器人启用加签则必填
+```
+
+```yaml
+# configs/config.local.yaml（勿提交，可加入 .gitignore）
+timezone: "Asia/Shanghai"
+configs:
+  - image_id: "你的镜像ID"
+    schedules:
+      - time: "10:00"
+        min_count: 6
+      - time: "22:00"
+        max_count: 3
+```
+
+也可用 `export` 设置环境变量，或直接用 `XGC_CONFIG` 传入完整 YAML 内容。
 
 ## 钉钉机器人配置
 
 1. 钉钉群 → 群设置 → 智能群助手 → 添加机器人
 2. 选择「自定义」机器人
-3. 安全设置选择「自定义关键词」，添加如：`实例`、`调度`、`成功`、`失败`
-4. 复制 Webhook 地址，填入 GitHub Secrets 的 `DINGTALK_WEBHOOK`
+3. 安全设置：
+   - **自定义关键词**：添加如 `实例`、`调度`、`成功`、`失败`
+   - **加签**：若选择加签，复制 SEC 开头的密钥，填入 `DINGTALK_SECRET` 环境变量
+4. 复制 Webhook 地址，填入 `DINGTALK_WEBHOOK`
 
 ## 通知内容示例
 

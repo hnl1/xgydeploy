@@ -16,6 +16,7 @@ type ScheduleRule struct {
 
 type ConfigItem struct {
 	ImageID      string         `yaml:"image_id"`
+	ImageType    string         `yaml:"image_type"` // public | private，默认 private
 	Schedules    []ScheduleRule  `yaml:"schedules"`
 	GPUModel     string         `yaml:"gpu_model"`
 	GPUCount     int            `yaml:"gpu_count"`
@@ -60,6 +61,9 @@ func applyDefaults(cfg configFile) (string, []ConfigItem, error) {
 		timezone = "Asia/Shanghai"
 	}
 	for i := range cfg.Configs {
+		if cfg.Configs[i].ImageType == "" {
+			cfg.Configs[i].ImageType = "private"
+		}
 		if cfg.Configs[i].GPUModel == "" {
 			cfg.Configs[i].GPUModel = "NVIDIA GeForce RTX 4090"
 		}

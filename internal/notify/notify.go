@@ -2,11 +2,17 @@ package notify
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hnl1/xgydeploy/internal/config"
 	"github.com/hnl1/xgydeploy/internal/scheduler"
@@ -43,9 +49,15 @@ func buildMessage(results []scheduler.ActionResult, timeStr string) string {
 		sb.WriteString(fmt.Sprintf("- 操作后：%d 个\n", r.AfterCount))
 		if len(r.Created) > 0 {
 			sb.WriteString(fmt.Sprintf("- 已创建：%d 个\n", len(r.Created)))
+			for _, id := range r.Created {
+				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
+			}
 		}
 		if len(r.Destroyed) > 0 {
 			sb.WriteString(fmt.Sprintf("- 已销毁：%d 个\n", len(r.Destroyed)))
+			for _, id := range r.Destroyed {
+				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
+			}
 		}
 		if r.Error != "" {
 			sb.WriteString("- 错误：" + r.Error + "\n")
@@ -59,6 +71,13 @@ func SendDingtalk(results []scheduler.ActionResult, timeStr string) bool {
 	webhook := os.Getenv("DINGTALK_WEBHOOK")
 	if webhook == "" {
 		return false
+	}
+	if secret := os.Getenv("DINGTALK_SECRET"); secret != "" {
+		var err error
+		webhook, err = signWebhookURL(webhook, secret)
+		if err != nil {
+			return false
+		}
 	}
 	text := buildMessage(results, timeStr)
 	payload := map[string]any{
@@ -75,4 +94,19 @@ func SendDingtalk(results []scheduler.ActionResult, timeStr string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// signWebhookURL 钉钉 webhook 加签：timestamp + "\n" + secret，HMAC-SHA256，Base64，URL 编码
+func signWebhookURL(webhook, secret string) (string, error) {
+	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	stringToSign := timestamp + "\n" + secret
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(stringToSign))
+	sign := base64.StdEncoding.EncodeToString(h.Sum(nil))
+	sign = url.QueryEscape(sign)
+	sep := "?"
+	if strings.Contains(webhook, "?") {
+		sep = "&"
+	}
+	return webhook + sep + "timestamp=" + timestamp + "&sign=" + sign, nil
 }

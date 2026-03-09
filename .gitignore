@@ -2,3 +2,4 @@
 *.exe
 .env
 *.local.yaml
+configs/*.local.yaml

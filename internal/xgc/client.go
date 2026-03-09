@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 )
 
 const baseURL = "https://api.xiangongyun.com"
@@ -24,7 +25,7 @@ func New() (*Client, error) {
 	}
 	return &Client{
 		token:  token,
-		client: &http.Client{Timeout: 30},
+		client: &http.Client{Timeout: 10 * time.Second},
 	}, nil
 }
 
@@ -64,12 +65,30 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 	return data, nil
 }
 
+// ListInstances 实际返回：{code, data: {list: []Instance}, success}，list 在 data.data.list
 func (c *Client) ListInstances() ([]map[string]any, error) {
 	data, err := c.request("GET", "/open/instances", nil)
 	if err != nil {
 		return nil, err
 	}
-	list, _ := data["list"].([]any)
+	if data == nil {
+		log.Printf("[xgc] ListInstances 响应为空")
+		return []map[string]any{}, nil
+	}
+	// 兼容 data.list（文档）和 data.data.list（实际 API）
+	inner, _ := data["data"].(map[string]any)
+	if inner == nil {
+		inner = data
+	}
+	list, ok := inner["list"].([]any)
+	if !ok {
+		keys := make([]string, 0, len(data))
+		for k := range data {
+			keys = append(keys, k)
+		}
+		log.Printf("[xgc] ListInstances 响应无 list 字段，顶层 keys=%v", keys)
+		return []map[string]any{}, nil
+	}
 	result := make([]map[string]any, 0, len(list))
 	for _, v := range list {
 		if m, ok := v.(map[string]any); ok {
@@ -81,10 +100,10 @@ func (c *Client) ListInstances() ([]map[string]any, error) {
 
 type DeployOpts struct {
 	Image        string
+	ImageType    string // public | private
 	GPUModel     string
 	GPUCount     int
 	DataCenterID int
-	Name         string
 }
 
 func (c *Client) Deploy(opts DeployOpts) (string, error) {
@@ -93,18 +112,27 @@ func (c *Client) Deploy(opts DeployOpts) (string, error) {
 		"gpu_model":              opts.GPUModel,
 		"gpu_count":              opts.GPUCount,
 		"data_center_id":        opts.DataCenterID,
-		"image_type":             "public",
+		"image_type":             opts.ImageType,
 		"storage":                false,
 		"storage_mount_path":     "/root/cloud",
 		"system_disk_expand":     false,
 		"system_disk_expand_size": 0,
-		"name":                   opts.Name,
 	}
 	data, err := c.request("POST", "/open/instance/deploy", body)
 	if err != nil {
 		return "", err
 	}
-	id, _ := data["id"].(string)
+	// 实际返回与 instances 一致：{code, data: {id: string}, success}，id 可能在 data.data.id
+	inner, _ := data["data"].(map[string]any)
+	if inner == nil {
+		inner = data
+	}
+	id, _ := inner["id"].(string)
+	if id == "" && data != nil {
+		code, _ := data["code"]
+		msg, _ := data["msg"].(string)
+		log.Printf("[xgc] deploy 失败: code=%v msg=%q", code, msg)
+	}
 	return id, nil
 }
 
@@ -113,28 +141,75 @@ func (c *Client) Destroy(instanceID string) error {
 	return err
 }
 
+// WaitForRunning 轮询直到指定实例全部 status=running，或超时。返回已 running 的 ID 列表。
+func (c *Client) WaitForRunning(instanceIDs []string, pollInterval, timeout time.Duration) []string {
+	if len(instanceIDs) == 0 {
+		return nil
+	}
+	idSet := make(map[string]bool)
+	for _, id := range instanceIDs {
+		idSet[id] = true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		all, err := c.ListInstances()
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+		running := make(map[string]bool)
+		for _, inst := range all {
+			id, _ := inst["id"].(string)
+			status, _ := inst["status"].(string)
+			if idSet[id] && status == "running" {
+				running[id] = true
+			}
+		}
+		done := true
+		for id := range idSet {
+			if !running[id] {
+				done = false
+				break
+			}
+		}
+		if done {
+			return instanceIDs
+		}
+		time.Sleep(pollInterval)
+	}
+	// 超时：返回当前已 running 的
+	all, _ := c.ListInstances()
+	var result []string
+	for _, inst := range all {
+		id, _ := inst["id"].(string)
+		status, _ := inst["status"].(string)
+		if idSet[id] && status == "running" {
+			result = append(result, id)
+		}
+	}
+	if len(result) < len(instanceIDs) {
+		log.Printf("[xgc] WaitForRunning 超时: 等待 %d 个，仅 %d 个已 running", len(instanceIDs), len(result))
+	}
+	return result
+}
+
+// DeployAsync 串行创建，避免并发触发 API 限流
 func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
-	var mu sync.Mutex
 	var created []string
 	var errs []error
-	var wg sync.WaitGroup
 	for i := 0; i < count; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			optsCopy := opts
-			optsCopy.Name = fmt.Sprintf("%s-%d", opts.Name, idx)
-			id, err := c.Deploy(optsCopy)
-			mu.Lock()
-			if err != nil {
-				errs = append(errs, err)
-			} else {
-				created = append(created, id)
-			}
-			mu.Unlock()
-		}(i)
+		id, err := c.Deploy(opts)
+		if err != nil {
+			errs = append(errs, err)
+			log.Printf("[xgc] 创建实例 %d/%d 失败: %v", i+1, count, err)
+		} else if id != "" {
+			created = append(created, id)
+			log.Printf("[xgc] 创建实例 %d/%d 成功: %s", i+1, count, id)
+		} else {
+			errs = append(errs, fmt.Errorf("deploy 响应缺少 id"))
+			log.Printf("[xgc] 创建实例 %d/%d 失败: 响应为空 id", i+1, count)
+		}
 	}
-	wg.Wait()
 	return created, errs
 }
 

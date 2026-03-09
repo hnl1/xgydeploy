@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/hnl1/xgydeploy/internal/config"
 	"github.com/hnl1/xgydeploy/internal/notify"
 	"github.com/hnl1/xgydeploy/internal/scheduler"
@@ -13,6 +14,8 @@ import (
 )
 
 func main() {
+	_ = godotenv.Load() // 加载 .env，文件不存在时忽略
+
 	timezone, configs, err := config.Load("")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)

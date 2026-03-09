@@ -83,20 +83,29 @@ func applyMinCount(client *xgc.Client, cfg config.ConfigItem, rule config.Schedu
 
 	created, errs := client.DeployAsync(xgc.DeployOpts{
 		Image:        cfg.ImageID,
+		ImageType:    cfg.ImageType,
 		GPUModel:     cfg.GPUModel,
 		GPUCount:     cfg.GPUCount,
 		DataCenterID: cfg.DataCenterID,
-		Name:         instanceNamePrefix(cfg.ImageID) + "-" + now.Format("200601021504"),
 	}, toCreate)
+
+	// 轮询直到实例完全启动（status=running）才算成功
+	verified := created
+	if len(created) > 0 {
+		log.Printf("[scheduler] 配置 %s 等待 %d 个实例启动完成...", configKey, len(created))
+		verified = client.WaitForRunning(created, 15*time.Second, 5*time.Minute)
+		log.Printf("[scheduler] 配置 %s 已 running: %d/%d", configKey, len(verified), len(created))
+	}
+	afterCount := beforeCount + len(verified)
 
 	return ActionResult{
 		ConfigKey:   configKey,
 		ImageID:     cfg.ImageID,
 		Rule:        rule,
 		BeforeCount: beforeCount,
-		AfterCount:  beforeCount + len(created),
-		Created:     created,
-		Success:     len(errs) == 0,
+		AfterCount:  afterCount,
+		Created:     verified,
+		Success:     len(errs) == 0 && len(verified) == len(created),
 		Error:       firstErr(errs),
 	}
 }
@@ -187,13 +196,41 @@ func getTimestamp(inst map[string]any) int64 {
 	return 0
 }
 
+const minutesPerDay = 24 * 60
+
 func findMatchingRule(cfg config.ConfigItem, now time.Time, tz *time.Location) *config.ScheduleRule {
 	local := now.In(tz)
-	ch, cm := local.Hour(), local.Minute()
+	nowMinutes := local.Hour()*60 + local.Minute()
+
+	type ruleAt struct {
+		min int
+		r   config.ScheduleRule
+	}
+	var rules []ruleAt
 	for _, r := range cfg.Schedules {
 		rh, rm := parseTime(r.Time)
-		if rh == ch && rm == cm {
-			return &r
+		rules = append(rules, ruleAt{rh*60 + rm, r})
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].min < rules[j].min })
+
+	// 时间段 [start, end) 左闭右开，取 start 对应的规则
+	for i := range rules {
+		start := rules[i].min
+		var end int
+		if i+1 < len(rules) {
+			end = rules[i+1].min
+			if nowMinutes >= start && nowMinutes < end {
+				return &rules[i].r
+			}
+		} else {
+			// 最后一段跨日：[22:00, 次日 10:00)
+			end = rules[0].min + minutesPerDay
+			if nowMinutes >= start || nowMinutes < rules[0].min {
+				return &rules[i].r
+			}
 		}
 	}
 	return nil
