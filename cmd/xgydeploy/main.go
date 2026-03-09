@@ -49,19 +49,13 @@ func main() {
 
 	hasDingtalk := os.Getenv("DINGTALK_WEBHOOK") != ""
 
-	// 筛选需要实际操作的计划
 	var actionPlans []scheduler.ActionPlan
 	for _, p := range plans {
-		switch p.Action {
-		case "create":
-			fmt.Printf("  [%s] 计划创建 %d 个 (当前 %d)\n", p.ConfigKey, p.Count, p.Current)
-		case "destroy":
-			fmt.Printf("  [%s] 计划销毁 %d 个 (当前 %d)\n", p.ConfigKey, p.Count, p.Current)
-		}
 		if p.Count > 0 {
 			actionPlans = append(actionPlans, p)
 		}
 	}
+	fmt.Printf("匹配规则: %d 个配置，%d 个需要操作\n", len(plans), len(actionPlans))
 
 	// 计划通知始终发送
 	if hasDingtalk {
@@ -83,22 +77,13 @@ func main() {
 	results := scheduler.Execute(client, actionPlans)
 	log.Printf("[main] 调度完成，处理 %d 个配置", len(results))
 
+	successCount := 0
 	for _, r := range results {
-		status := "成功"
-		if !r.Success {
-			status = "失败"
-		}
-		fmt.Printf("  [%s] %s | %d -> %d\n", r.ConfigKey, status, r.BeforeCount, r.AfterCount)
-		if len(r.Created) > 0 {
-			fmt.Printf("    创建: %v\n", r.Created)
-		}
-		if len(r.Destroyed) > 0 {
-			fmt.Printf("    销毁: %v\n", r.Destroyed)
-		}
-		if r.Error != "" {
-			fmt.Printf("    错误: %s\n", r.Error)
+		if r.Success {
+			successCount++
 		}
 	}
+	fmt.Printf("执行完成: %d 成功, %d 失败\n", successCount, len(results)-successCount)
 
 	if hasDingtalk {
 		balance, _ := client.GetBalance()

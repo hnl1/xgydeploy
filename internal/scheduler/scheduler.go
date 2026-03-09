@@ -67,7 +67,7 @@ func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now 
 	}
 
 	var plans []ActionPlan
-	for _, cfg := range configs {
+	for i, cfg := range configs {
 		rule := findMatchingRule(cfg, now, tz)
 		if rule == nil {
 			continue
@@ -78,7 +78,7 @@ func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now 
 		if configKey == "" {
 			configKey = truncateConfigKey(cfg.ImageID)
 		}
-		log.Printf("[scheduler] 配置 %s 匹配规则 %s，当前实例数 %d", configKey, rule.Time, len(mine))
+		log.Printf("[scheduler] 配置 #%d 匹配规则，当前实例数 %d", i+1, len(mine))
 
 		plan := ActionPlan{
 			ConfigKey: configKey,
@@ -149,15 +149,15 @@ func Execute(client *xgc.Client, plans []ActionPlan) []ActionResult {
 }
 
 func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
-	log.Printf("[scheduler] 配置 %s 开始创建 %d 个实例", plan.ConfigKey, plan.Count)
+	log.Printf("[scheduler] 开始创建 %d 个实例", plan.Count)
 
 	created, errs := client.DeployAsync(plan.DeployOpts, plan.Count)
 
 	verified := created
 	if len(created) > 0 {
-		log.Printf("[scheduler] 配置 %s 等待 %d 个实例启动完成...", plan.ConfigKey, len(created))
+		log.Printf("[scheduler] 等待 %d 个实例启动完成...", len(created))
 		verified = client.WaitForRunning(created, 15*time.Second, 5*time.Minute)
-		log.Printf("[scheduler] 配置 %s 已 running: %d/%d", plan.ConfigKey, len(verified), len(created))
+		log.Printf("[scheduler] 已启动: %d/%d", len(verified), len(created))
 	}
 
 	return ActionResult{
@@ -174,7 +174,7 @@ func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
 }
 
 func executeDestroy(client *xgc.Client, plan ActionPlan) ActionResult {
-	log.Printf("[scheduler] 配置 %s 开始销毁 %d 个实例", plan.ConfigKey, plan.Count)
+	log.Printf("[scheduler] 开始销毁 %d 个实例", plan.Count)
 
 	destroyed, errs := client.DestroyAsync(plan.DestroyIDs)
 

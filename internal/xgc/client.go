@@ -262,7 +262,7 @@ func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
 				log.Printf("[xgc] 创建实例 %d/%d 失败: %v", i+1, count, err)
 			} else if id != "" {
 				created = append(created, id)
-				log.Printf("[xgc] 创建实例 %d/%d 成功: %s", i+1, count, id)
+				log.Printf("[xgc] 创建实例 %d/%d 成功", i+1, count)
 			} else {
 				errs = append(errs, fmt.Errorf("deploy 响应缺少 id"))
 				log.Printf("[xgc] 创建实例 %d/%d 失败: 响应为空 id", i+1, count)
