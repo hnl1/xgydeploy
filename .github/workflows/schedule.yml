@@ -20,7 +20,7 @@ jobs:
           go-version: "1.26"
 
       - name: 构建
-        run: go build -o xgydeploy .
+        run: go build -o xgydeploy ./cmd/xgydeploy
 
       - name: 执行调度
         env:

@@ -1,0 +1,23 @@
+# 仙宫云实例自动调度配置（示例）
+# 实际配置请放入 GitHub Secrets 的 XGC_CONFIG，或本地 configs/config.yaml（勿提交敏感信息）
+# 时区（用于解析 schedule 中的 time）
+timezone: "Asia/Shanghai"
+
+configs:
+  - image_id: "你的镜像ID"  # 从仙宫云控制台获取
+    gpu_model: "NVIDIA GeForce RTX 4090"
+    gpu_count: 1
+    data_center_id: 1
+    schedules:
+      - time: "10:00"
+        min_count: 6   # 每天 10:00 至少 6 个实例
+      - time: "22:00"
+        max_count: 3   # 每天 22:00 最多 3 个实例
+
+  # 可添加更多配置
+  # - image_id: "另一个镜像id"
+  #   schedules:
+  #     - time: "08:00"
+  #       min_count: 4
+  #     - time: "20:00"
+  #       max_count: 2

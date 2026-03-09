@@ -1,0 +1,4 @@
+/xgydeploy
+*.exe
+.env
+*.local.yaml
