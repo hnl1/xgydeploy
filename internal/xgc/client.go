@@ -7,11 +7,21 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
 
 const baseURL = "https://api.xiangongyun.com"
+
+type APIError struct {
+	Code int
+	Msg  string
+}
+
+func (e *APIError) Error() string {
+	return e.Msg
+}
 
 type Client struct {
 	token  string
@@ -171,14 +181,14 @@ func (c *Client) Deploy(opts DeployOpts) (string, error) {
 	}
 	id, _ := inner["id"].(string)
 	if id == "" && data != nil {
-		code, _ := data["code"]
+		code := toInt(data["code"])
 		msg, _ := data["msg"].(string)
 		if msg != "" {
-			log.Printf("[xgc] deploy 失败: code=%v msg=%q", code, msg)
-			return "", fmt.Errorf("%s", msg)
+			log.Printf("[xgc] deploy 失败: code=%d msg=%q", code, msg)
+			return "", &APIError{Code: code, Msg: msg}
 		}
-		log.Printf("[xgc] deploy 失败: code=%v 响应缺少 id", code)
-		return "", fmt.Errorf("deploy 响应缺少 id")
+		log.Printf("[xgc] deploy 失败: code=%d 响应缺少 id", code)
+		return "", &APIError{Code: code, Msg: "deploy 响应缺少 id"}
 	}
 	return id, nil
 }
@@ -240,6 +250,29 @@ func (c *Client) WaitForRunning(instanceIDs []string, pollInterval, timeout time
 }
 
 const maxConcurrentDeploy = 3
+const gpuRetryMax = 5
+const gpuRetryInterval = 30 * time.Second
+
+// isGPUInsufficient 通过 msg 关键词判断是否为 GPU 不足。
+// 仙宫云无公开错误码表，且 code=1000 并非 GPU 不足专用，其他错误也会返回 1000。
+func isGPUInsufficient(err error) bool {
+	if ae, ok := err.(*APIError); ok {
+		return strings.Contains(ae.Msg, "可用GPU不足")
+	}
+	return false
+}
+
+func toInt(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	}
+	return 0
+}
 
 func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
 	if count <= 0 {
@@ -259,7 +292,18 @@ func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			id, err := c.Deploy(opts)
+			var id string
+			var err error
+			for attempt := 0; attempt <= gpuRetryMax; attempt++ {
+				if attempt > 0 {
+					log.Printf("[xgc] 创建实例 %d/%d GPU不足，第 %d 次重试...", i+1, count, attempt)
+					time.Sleep(gpuRetryInterval)
+				}
+				id, err = c.Deploy(opts)
+				if err == nil || !isGPUInsufficient(err) {
+					break
+				}
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
