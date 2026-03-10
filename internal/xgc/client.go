@@ -173,7 +173,12 @@ func (c *Client) Deploy(opts DeployOpts) (string, error) {
 	if id == "" && data != nil {
 		code, _ := data["code"]
 		msg, _ := data["msg"].(string)
-		log.Printf("[xgc] deploy 失败: code=%v msg=%q", code, msg)
+		if msg != "" {
+			log.Printf("[xgc] deploy 失败: code=%v msg=%q", code, msg)
+			return "", fmt.Errorf("%s", msg)
+		}
+		log.Printf("[xgc] deploy 失败: code=%v 响应缺少 id", code)
+		return "", fmt.Errorf("deploy 响应缺少 id")
 	}
 	return id, nil
 }
@@ -260,12 +265,9 @@ func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
 			if err != nil {
 				errs = append(errs, err)
 				log.Printf("[xgc] 创建实例 %d/%d 失败: %v", i+1, count, err)
-			} else if id != "" {
+			} else {
 				created = append(created, id)
 				log.Printf("[xgc] 创建实例 %d/%d 成功", i+1, count)
-			} else {
-				errs = append(errs, fmt.Errorf("deploy 响应缺少 id"))
-				log.Printf("[xgc] 创建实例 %d/%d 失败: 响应为空 id", i+1, count)
 			}
 		}()
 	}

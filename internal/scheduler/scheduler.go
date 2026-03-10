@@ -41,8 +41,8 @@ type ActionResult struct {
 	AfterCount  int
 	Created     []string
 	Destroyed   []string
-	Success     bool
-	Error       string
+	Success bool
+	Errors  []ErrCount
 }
 
 func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now time.Time) ([]ActionPlan, error) {
@@ -169,7 +169,7 @@ func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
 		AfterCount:  plan.Current + len(verified),
 		Created:     verified,
 		Success:     len(errs) == 0 && len(verified) == len(created),
-		Error:       firstErr(errs),
+		Errors:      errCounts(errs),
 	}
 }
 
@@ -187,7 +187,7 @@ func executeDestroy(client *xgc.Client, plan ActionPlan) ActionResult {
 		AfterCount:  plan.Current - len(destroyed),
 		Destroyed:   destroyed,
 		Success:     len(errs) == 0,
-		Error:       firstErr(errs),
+		Errors:      errCounts(errs),
 	}
 }
 
@@ -213,11 +213,26 @@ func pickOldestInstanceIDs(instances []map[string]any, n int) []string {
 	return ids
 }
 
-func firstErr(errs []error) string {
-	if len(errs) > 0 {
-		return errs[0].Error()
+type ErrCount struct {
+	Message string
+	Count   int
+}
+
+func errCounts(errs []error) []ErrCount {
+	order := []string{}
+	counts := map[string]int{}
+	for _, e := range errs {
+		msg := e.Error()
+		if counts[msg] == 0 {
+			order = append(order, msg)
+		}
+		counts[msg]++
 	}
-	return ""
+	result := make([]ErrCount, len(order))
+	for i, msg := range order {
+		result[i] = ErrCount{Message: msg, Count: counts[msg]}
+	}
+	return result
 }
 
 func instanceNamePrefix(imageID string) string {

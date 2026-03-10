@@ -94,8 +94,11 @@ func buildResultMessage(results []scheduler.ActionResult, timeStr string, balanc
 				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
 			}
 		}
-		if r.Error != "" {
-			sb.WriteString("- 错误：" + r.Error + "\n")
+		if len(r.Errors) > 0 {
+			sb.WriteString("- 错误：\n")
+			for _, e := range r.Errors {
+				sb.WriteString(fmt.Sprintf("  - %s（%d 个）\n", e.Message, e.Count))
+			}
 		}
 		sb.WriteString("\n")
 	}
