@@ -49,7 +49,7 @@ func actionEmoji(action string) string {
 func formatPlanAction(p scheduler.ActionPlan) string {
 	switch p.Action {
 	case "create":
-		return fmt.Sprintf("📥 计划创建 %d 个（允许回退）", p.Count)
+		return fmt.Sprintf("📥 计划创建 %d 个", p.Count)
 	case "destroy":
 		return fmt.Sprintf("🗑️ 计划销毁 %d 个", p.Count)
 	case "replace":
@@ -109,7 +109,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 			actualCount = r.Replaced
 		}
 
-		sb.WriteString(fmt.Sprintf("### %s（%s %s %d 个）\n\n", r.ConfigKey, actionEmoji(r.Action), actionWord, actualCount))
+		sb.WriteString(fmt.Sprintf("### %s | %s %s %d 个\n\n", r.ConfigKey, actionEmoji(r.Action), actionWord, actualCount))
 
 		var preferred string
 		var beforeDist map[string]int
@@ -123,7 +123,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 			sb.WriteString(fmt.Sprintf("**规则**：%s %s，首选 %s\n\n", p.Rule.Time, formatRule(p.Rule), preferred))
 
 			// 执行前实例
-			sb.WriteString(fmt.Sprintf("**执行前实例共 %d 个（首选 %d / 回退 %d）**\n", p.Current, p.PreferredCount, p.FallbackCount))
+			sb.WriteString(fmt.Sprintf("**执行前实例共 %d 个（含回退 %d）**\n", p.Current, p.FallbackCount))
 			writeModelDist(&sb, beforeDist)
 			sb.WriteString("\n")
 
@@ -168,7 +168,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 					afterPreferred += c
 				}
 			}
-			sb.WriteString(fmt.Sprintf("\n**目前实例共 %d 个（首选 %d / 回退 %d）**\n", afterTotal, afterPreferred, afterTotal-afterPreferred))
+			sb.WriteString(fmt.Sprintf("\n**目前实例共 %d 个（含回退 %d）**\n", afterTotal, afterTotal-afterPreferred))
 			writeModelDist(&sb, afterDist)
 		}
 
