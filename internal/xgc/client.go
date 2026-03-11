@@ -331,6 +331,49 @@ func toInt(v any) int {
 	return 0
 }
 
+type retryConfig struct {
+	retriesPerModel int
+	delayFn         func() time.Duration
+}
+
+var defaultRetryConfig = retryConfig{
+	retriesPerModel: gpuRetryPerModel,
+	delayFn:         gpuRetryDelay,
+}
+
+// deployWithRetry 对单个实例执行带重试和型号回退的部署。
+func deployWithRetry(deployFn func(DeployOpts) (string, error), opts DeployOpts, models []string, cfg retryConfig) (DeployResult, error) {
+	var id string
+	var err error
+	var usedModel string
+
+	for mi, model := range models {
+		tryOpts := opts
+		tryOpts.GPUModel = model
+		for attempt := 0; attempt < cfg.retriesPerModel; attempt++ {
+			if (mi > 0 || attempt > 0) && cfg.delayFn != nil {
+				time.Sleep(cfg.delayFn())
+			}
+			id, err = deployFn(tryOpts)
+			if err == nil {
+				usedModel = model
+				break
+			}
+			if !isGPUUnavailable(err) {
+				break
+			}
+		}
+		if err == nil || !isGPUUnavailable(err) {
+			break
+		}
+	}
+
+	if err != nil {
+		return DeployResult{}, err
+	}
+	return DeployResult{ID: id, GPUModel: usedModel}, nil
+}
+
 // DeployAsync 并发部署 count 个实例。
 // allowFallback=true 时按优先级尝试回退型号，每种型号最多重试 gpuRetryPerModel 次；
 // allowFallback=false 时仅尝试配置的型号。
@@ -358,33 +401,7 @@ func (c *Client) DeployAsync(opts DeployOpts, count int, allowFallback bool) ([]
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			var id string
-			var err error
-			var usedModel string
-
-			for mi, model := range models {
-				tryOpts := opts
-				tryOpts.GPUModel = model
-				for attempt := 0; attempt < gpuRetryPerModel; attempt++ {
-					if mi > 0 || attempt > 0 {
-						delay := gpuRetryDelay()
-						log.Printf("[xgc] 实例 %d/%d 计划[%s] 尝试[%s] 第%d次重试（等待 %v）",
-							i+1, count, GPUModelShortName(opts.GPUModel), GPUModelShortName(model), attempt+1, delay.Round(time.Second))
-						time.Sleep(delay)
-					}
-					id, err = c.Deploy(tryOpts)
-					if err == nil {
-						usedModel = model
-						break
-					}
-					if !isGPUUnavailable(err) {
-						break
-					}
-				}
-				if err == nil || !isGPUUnavailable(err) {
-					break
-				}
-			}
+			result, err := deployWithRetry(c.Deploy, opts, models, defaultRetryConfig)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -392,11 +409,11 @@ func (c *Client) DeployAsync(opts DeployOpts, count int, allowFallback bool) ([]
 				errs = append(errs, err)
 				log.Printf("[xgc] 实例 %d/%d 计划[%s] 部署失败: %v", i+1, count, GPUModelShortName(opts.GPUModel), err)
 			} else {
-				results = append(results, DeployResult{ID: id, GPUModel: usedModel})
-				if usedModel == opts.GPUModel {
-					log.Printf("[xgc] 实例 %d/%d [%s] 部署成功", i+1, count, GPUModelShortName(usedModel))
+				results = append(results, result)
+				if result.GPUModel == opts.GPUModel {
+					log.Printf("[xgc] 实例 %d/%d [%s] 部署成功", i+1, count, GPUModelShortName(result.GPUModel))
 				} else {
-					log.Printf("[xgc] 实例 %d/%d 计划[%s] 实际[%s] 部署成功", i+1, count, GPUModelShortName(opts.GPUModel), GPUModelShortName(usedModel))
+					log.Printf("[xgc] 实例 %d/%d 计划[%s] 实际[%s] 部署成功", i+1, count, GPUModelShortName(opts.GPUModel), GPUModelShortName(result.GPUModel))
 				}
 			}
 		}()

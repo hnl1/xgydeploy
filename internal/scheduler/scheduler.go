@@ -12,6 +12,19 @@ import (
 	"github.com/hnl1/xgydeploy/internal/xgc"
 )
 
+// PlanClient 是 Plan 所需的 API 能力。
+type PlanClient interface {
+	ListInstances() ([]map[string]any, error)
+	ListImages() (map[string]string, error)
+}
+
+// ExecClient 是 Execute 所需的 API 能力。
+type ExecClient interface {
+	DeployAsync(opts xgc.DeployOpts, count int, allowFallback bool) ([]xgc.DeployResult, []error)
+	DestroyAsync(instanceIDs []string) ([]string, []error)
+	WaitForRunning(instanceIDs []string, pollInterval, timeout time.Duration) []string
+}
+
 var countedStatuses = map[string]bool{
 	"deploying":     true,
 	"running":       true,
@@ -104,7 +117,7 @@ func groupInstances(instances []map[string]any, imageID, preferredModel string) 
 	return instanceGroup{preferred: preferred, fallback: fallback, detail: detail}
 }
 
-func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now time.Time) ([]ActionPlan, error) {
+func Plan(client PlanClient, configs []config.ConfigItem, timezone string, now time.Time) ([]ActionPlan, error) {
 	tz, err := time.LoadLocation(timezone)
 	if err != nil {
 		tz = time.UTC
@@ -208,7 +221,7 @@ func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now 
 	return plans, nil
 }
 
-func Execute(client *xgc.Client, plans []ActionPlan) []ActionResult {
+func Execute(client ExecClient, plans []ActionPlan) []ActionResult {
 	results := make([]ActionResult, len(plans))
 	var wg sync.WaitGroup
 
@@ -243,7 +256,7 @@ func Execute(client *xgc.Client, plans []ActionPlan) []ActionResult {
 	return results
 }
 
-func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
+func executeCreate(client ExecClient, plan ActionPlan) ActionResult {
 	log.Printf("[scheduler] 开始创建 %d 个实例（允许回退=%v）", plan.Count, plan.AllowFallback)
 
 	deployed, errs := client.DeployAsync(plan.DeployOpts, plan.Count, plan.AllowFallback)
@@ -282,7 +295,7 @@ func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
 	}
 }
 
-func executeDestroy(client *xgc.Client, plan ActionPlan) ActionResult {
+func executeDestroy(client ExecClient, plan ActionPlan) ActionResult {
 	log.Printf("[scheduler] 开始销毁 %d 个实例", plan.Count)
 
 	destroyIDs := refIDs(plan.DestroyTargets)
@@ -309,7 +322,7 @@ func executeDestroy(client *xgc.Client, plan ActionPlan) ActionResult {
 	}
 }
 
-func executeReplace(client *xgc.Client, plan ActionPlan) ActionResult {
+func executeReplace(client ExecClient, plan ActionPlan) ActionResult {
 	preferred := xgc.GPUModelShortName(plan.DeployOpts.GPUModel)
 	log.Printf("[scheduler] 开始替换 %d 个非[%s]实例", plan.Count, preferred)
 

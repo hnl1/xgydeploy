@@ -1,6 +1,7 @@
 # 仙宫云实例自动调度
 
 [![lint](https://github.com/hnl1/xgydeploy/actions/workflows/lint.yml/badge.svg)](https://github.com/hnl1/xgydeploy/actions/workflows/lint.yml)
+[![test](https://github.com/hnl1/xgydeploy/actions/workflows/test.yml/badge.svg)](https://github.com/hnl1/xgydeploy/actions/workflows/test.yml)
 
 根据配置的时间与数量限制，自动创建/销毁仙宫云 GPU 实例，支持多份配置、GPU 型号智能回退、钉钉通知、GitHub Actions 部署。
 
