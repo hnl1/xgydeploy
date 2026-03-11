@@ -51,8 +51,6 @@ func main() {
 		return
 	}
 
-	hasDingtalk := os.Getenv("DINGTALK_WEBHOOK") != ""
-
 	var actionPlans []scheduler.ActionPlan
 	for _, p := range plans {
 		if p.Count > 0 {
@@ -60,16 +58,6 @@ func main() {
 		}
 	}
 	fmt.Printf("匹配规则: %d 个配置，%d 个需要操作\n", len(plans), len(actionPlans))
-
-	// 计划通知始终发送
-	if hasDingtalk {
-		balance, _ := client.GetBalance()
-		if notify.SendPlanDingtalk(plans, timeStr, balance) {
-			fmt.Println("钉钉通知: 计划已发送")
-		} else {
-			fmt.Println("钉钉通知: 计划发送失败")
-		}
-	}
 
 	if len(actionPlans) == 0 {
 		fmt.Println("所有配置已满足要求，无需操作")
@@ -89,9 +77,9 @@ func main() {
 	}
 	fmt.Printf("执行完成: %d 成功, %d 失败\n", successCount, len(results)-successCount)
 
-	if hasDingtalk {
+	if webhook := os.Getenv("DINGTALK_WEBHOOK"); webhook != "" {
 		balance, _ := client.GetBalance()
-		if notify.SendResultDingtalk(results, timeStr, balance) {
+		if notify.SendResultDingtalk(actionPlans, results, timeStr, balance) {
 			fmt.Println("钉钉通知: 结果已发送")
 		} else {
 			fmt.Println("钉钉通知: 结果发送失败")
