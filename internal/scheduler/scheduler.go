@@ -345,9 +345,7 @@ func executeReplace(client *xgc.Client, plan ActionPlan) ActionResult {
 		destroyModelMap := refModelMap(toDestroy)
 		var destroyErrs []error
 		destroyed, destroyErrs := client.DestroyAsync(destroyIDs)
-		for _, e := range destroyErrs {
-			errs = append(errs, e)
-		}
+		errs = append(errs, destroyErrs...)
 		for _, id := range destroyed {
 			destroyedRefs = append(destroyedRefs, InstanceRef{ID: id, GPUModel: destroyModelMap[id]})
 		}
@@ -489,8 +487,6 @@ func getTimestamp(inst map[string]any) int64 {
 	}
 	return 0
 }
-
-const minutesPerDay = 24 * 60
 
 func findMatchingRule(cfg config.ConfigItem, now time.Time, tz *time.Location) *config.ScheduleRule {
 	local := now.In(tz)

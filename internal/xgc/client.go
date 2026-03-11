@@ -60,7 +60,7 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 400 {
 		log.Printf("[xgc] API 请求失败: %s %s -> %s", method, path, resp.Status)

@@ -78,7 +78,7 @@ func writeModelDist(sb *strings.Builder, dist map[string]int) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		sb.WriteString(fmt.Sprintf("- %s × %d\n", k, dist[k]))
+		fmt.Fprintf(sb, "- %s × %d\n", k, dist[k])
 	}
 }
 
@@ -103,13 +103,14 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 	for i, r := range results {
 		actionWord := resultActionWord(r.Action)
 		actualCount := len(r.CreatedInstances)
-		if r.Action == "destroy" {
+		switch r.Action {
+		case "destroy":
 			actualCount = len(r.DestroyedInstances)
-		} else if r.Action == "replace" {
+		case "replace":
 			actualCount = r.Replaced
 		}
 
-		sb.WriteString(fmt.Sprintf("### %s | %s %s %d 个\n\n", r.ConfigKey, actionEmoji(r.Action), actionWord, actualCount))
+		fmt.Fprintf(&sb, "### %s | %s %s %d 个\n\n", r.ConfigKey, actionEmoji(r.Action), actionWord, actualCount)
 
 		var preferred string
 		var beforeDist map[string]int
@@ -120,7 +121,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 			beforeDist = fullModelDist(preferred, p.PreferredCount, p.FallbackDetail)
 
 			// 规则
-			sb.WriteString(fmt.Sprintf("**规则**：%s %s，首选 %s\n\n", p.Rule.Time, formatRule(p.Rule), preferred))
+			fmt.Fprintf(&sb, "**规则**：%s %s，首选 %s\n\n", p.Rule.Time, formatRule(p.Rule), preferred)
 
 			// 执行前实例
 			sb.WriteString(fmt.Sprintf("**执行前实例共 %d 个（含回退 %d）**\n", p.Current, p.FallbackCount))
@@ -201,7 +202,7 @@ func sendDingtalk(title, text string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
@@ -233,7 +234,7 @@ func SendConfigDingtalk(rawYAML string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
