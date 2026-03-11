@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -250,8 +251,14 @@ func (c *Client) WaitForRunning(instanceIDs []string, pollInterval, timeout time
 }
 
 const maxConcurrentDeploy = 3
-const gpuRetryMax = 5
-const gpuRetryInterval = 30 * time.Second
+const gpuRetryAttempts = 5
+const gpuRetryMinInterval = 20 * time.Second
+const gpuRetryMaxInterval = 60 * time.Second
+
+func gpuRetryDelay() time.Duration {
+	jitter := rand.Int63n(int64(gpuRetryMaxInterval - gpuRetryMinInterval))
+	return gpuRetryMinInterval + time.Duration(jitter)
+}
 
 // isGPUInsufficient 通过 msg 关键词判断是否为 GPU 不足。
 // 仙宫云无公开错误码表，且 code=1000 并非 GPU 不足专用，其他错误也会返回 1000。
@@ -294,10 +301,11 @@ func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
 
 			var id string
 			var err error
-			for attempt := 0; attempt <= gpuRetryMax; attempt++ {
+			for attempt := 0; attempt <= gpuRetryAttempts; attempt++ {
 				if attempt > 0 {
-					log.Printf("[xgc] 创建实例 %d/%d GPU不足，第 %d 次重试...", i+1, count, attempt)
-					time.Sleep(gpuRetryInterval)
+					delay := gpuRetryDelay()
+					log.Printf("[xgc] 创建实例 %d/%d GPU不足，第 %d 次重试（等待 %v）...", i+1, count, attempt, delay.Round(time.Second))
+					time.Sleep(delay)
 				}
 				id, err = c.Deploy(opts)
 				if err == nil || !isGPUInsufficient(err) {
