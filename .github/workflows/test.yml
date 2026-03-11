@@ -1,4 +1,4 @@
-name: 测试
+name: test
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-      - name: 运行测试
+      - name: Run tests
         run: go test ./... -v -race -coverprofile=coverage.out
-      - name: 测试覆盖率
+      - name: Coverage
         run: go tool cover -func=coverage.out
