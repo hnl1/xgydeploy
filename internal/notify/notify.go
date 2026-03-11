@@ -34,33 +34,64 @@ func formatBalance(balance float64) string {
 	return fmt.Sprintf("💰 账户余额：%.2f 元\n", balance)
 }
 
-func formatModelDetail(detail map[string]int) string {
-	if len(detail) == 0 {
-		return ""
+func actionEmoji(action string) string {
+	switch action {
+	case "create":
+		return "📥"
+	case "destroy":
+		return "🗑️"
+	case "replace":
+		return "🔄"
 	}
-	keys := make([]string, 0, len(detail))
-	for k := range detail {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s×%d", k, detail[k]))
-	}
-	return strings.Join(parts, " / ")
+	return ""
 }
 
 func formatPlanAction(p scheduler.ActionPlan) string {
-	preferred := xgc.GPUModelShortName(p.DeployOpts.GPUModel)
 	switch p.Action {
 	case "create":
-		return fmt.Sprintf("📥 创建 %d 个（允许回退）", p.Count)
+		return fmt.Sprintf("📥 计划创建 %d 个（允许回退）", p.Count)
 	case "destroy":
-		return fmt.Sprintf("📤 销毁 %d 个", p.Count)
+		return fmt.Sprintf("🗑️ 计划销毁 %d 个", p.Count)
 	case "replace":
-		return fmt.Sprintf("🔄 替换 %d 个 → %s", p.Count, preferred)
+		return fmt.Sprintf("🔄 计划替换 %d 个", p.Count)
 	}
 	return "未知"
+}
+
+func fullModelDist(preferredModel string, preferredCount int, fallbackDetail map[string]int) map[string]int {
+	dist := make(map[string]int)
+	if preferredCount > 0 {
+		dist[preferredModel] = preferredCount
+	}
+	for m, c := range fallbackDetail {
+		dist[m] = c
+	}
+	return dist
+}
+
+func writeModelDist(sb *strings.Builder, dist map[string]int) {
+	keys := make([]string, 0, len(dist))
+	for k := range dist {
+		if dist[k] > 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		sb.WriteString(fmt.Sprintf("- %s × %d\n", k, dist[k]))
+	}
+}
+
+func resultActionWord(action string) string {
+	switch action {
+	case "create":
+		return "创建"
+	case "destroy":
+		return "销毁"
+	case "replace":
+		return "替换"
+	}
+	return "操作"
 }
 
 func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.ActionResult, timeStr string, balance float64) string {
@@ -70,55 +101,77 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 	sb.WriteString(formatBalance(balance) + "\n")
 
 	for i, r := range results {
-		status := "✅ 成功"
-		if !r.Success {
-			status = "❌ 失败"
+		actionWord := resultActionWord(r.Action)
+		actualCount := len(r.CreatedInstances)
+		if r.Action == "destroy" {
+			actualCount = len(r.DestroyedInstances)
+		} else if r.Action == "replace" {
+			actualCount = r.Replaced
 		}
-		sb.WriteString(fmt.Sprintf("### %s | %s\n\n", r.ConfigKey, status))
 
-		// 计划情况
+		sb.WriteString(fmt.Sprintf("### %s（%s %s %d 个）\n\n", r.ConfigKey, actionEmoji(r.Action), actionWord, actualCount))
+
+		var preferred string
+		var beforeDist map[string]int
+
 		if i < len(plans) {
 			p := plans[i]
-			target := formatRule(p.Rule)
-			preferred := xgc.GPUModelShortName(p.DeployOpts.GPUModel)
-			sb.WriteString("**计划情况**\n")
-			sb.WriteString(fmt.Sprintf("- 规则：%s %s\n", p.Rule.Time, target))
-			sb.WriteString(fmt.Sprintf("- 首选型号：%s\n", preferred))
-			sb.WriteString(fmt.Sprintf("- 执行前实例：%d 个（首选 %d / 回退 %d）\n", p.Current, p.PreferredCount, p.FallbackCount))
-			if len(p.FallbackDetail) > 0 {
-				sb.WriteString(fmt.Sprintf("- 回退分布：%s\n", formatModelDetail(p.FallbackDetail)))
-			}
-			sb.WriteString(fmt.Sprintf("- 计划操作：%s\n", formatPlanAction(p)))
+			preferred = xgc.GPUModelShortName(p.DeployOpts.GPUModel)
+			beforeDist = fullModelDist(preferred, p.PreferredCount, p.FallbackDetail)
+
+			// 规则
+			sb.WriteString(fmt.Sprintf("**规则**：%s %s，首选 %s\n\n", p.Rule.Time, formatRule(p.Rule), preferred))
+
+			// 执行前实例
+			sb.WriteString(fmt.Sprintf("**执行前实例共 %d 个（首选 %d / 回退 %d）**\n", p.Current, p.PreferredCount, p.FallbackCount))
+			writeModelDist(&sb, beforeDist)
 			sb.WriteString("\n")
+
+			// 计划 + 实际结果
+			sb.WriteString(fmt.Sprintf("**%s，实际成功%s %d 个**\n", formatPlanAction(p), actionWord, actualCount))
 		}
 
-		// 实际执行情况
-		sb.WriteString("**执行结果**\n")
-		sb.WriteString(fmt.Sprintf("- 执行后实例：%d 个\n", r.AfterCount))
-		if len(r.Created) > 0 {
-			sb.WriteString(fmt.Sprintf("- 已创建：%d 个\n", len(r.Created)))
-			if len(r.ActualGPUModels) > 0 {
-				sb.WriteString(fmt.Sprintf("- 实际型号：%s\n", formatModelDetail(r.ActualGPUModels)))
-			}
-			for _, id := range r.Created {
-				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
-			}
+		for _, ref := range r.CreatedInstances {
+			sb.WriteString(fmt.Sprintf("- 新增 %s %s\n", ref.GPUModel, ref.ID))
 		}
-		if r.Replaced > 0 {
-			sb.WriteString(fmt.Sprintf("- 已替换：%d 个\n", r.Replaced))
+		for _, ref := range r.DestroyedInstances {
+			sb.WriteString(fmt.Sprintf("- 销毁 %s %s\n", ref.GPUModel, ref.ID))
 		}
-		if len(r.Destroyed) > 0 {
-			sb.WriteString(fmt.Sprintf("- 已销毁：%d 个\n", len(r.Destroyed)))
-			for _, id := range r.Destroyed {
-				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
-			}
-		}
+
 		if len(r.Errors) > 0 {
-			sb.WriteString("- ⚠️ 错误：\n")
+			sb.WriteString("\n**⚠️ 错误**\n")
 			for _, e := range r.Errors {
-				sb.WriteString(fmt.Sprintf("  - %s（%d 个）\n", e.Message, e.Count))
+				sb.WriteString(fmt.Sprintf("- %s（%d 个）\n", e.Message, e.Count))
 			}
 		}
+
+		// 目前实例
+		if beforeDist != nil {
+			afterDist := make(map[string]int)
+			for k, v := range beforeDist {
+				afterDist[k] = v
+			}
+			for _, ref := range r.CreatedInstances {
+				afterDist[ref.GPUModel]++
+			}
+			for _, ref := range r.DestroyedInstances {
+				afterDist[ref.GPUModel]--
+				if afterDist[ref.GPUModel] <= 0 {
+					delete(afterDist, ref.GPUModel)
+				}
+			}
+			afterTotal := 0
+			afterPreferred := 0
+			for m, c := range afterDist {
+				afterTotal += c
+				if m == preferred {
+					afterPreferred += c
+				}
+			}
+			sb.WriteString(fmt.Sprintf("\n**目前实例共 %d 个（首选 %d / 回退 %d）**\n", afterTotal, afterPreferred, afterTotal-afterPreferred))
+			writeModelDist(&sb, afterDist)
+		}
+
 		sb.WriteString("\n")
 	}
 	return sb.String()
