@@ -1,4 +1,4 @@
-name: 代码检查
+name: lint
 
 on:
   push:

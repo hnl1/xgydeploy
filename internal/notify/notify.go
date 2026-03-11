@@ -124,25 +124,25 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 			fmt.Fprintf(&sb, "**规则**：%s %s，首选 %s\n\n", p.Rule.Time, formatRule(p.Rule), preferred)
 
 			// 执行前实例
-			sb.WriteString(fmt.Sprintf("**执行前实例共 %d 个（含回退 %d）**\n", p.Current, p.FallbackCount))
+			fmt.Fprintf(&sb, "**执行前实例共 %d 个（含回退 %d）**\n", p.Current, p.FallbackCount)
 			writeModelDist(&sb, beforeDist)
 			sb.WriteString("\n")
 
 			// 计划 + 实际结果
-			sb.WriteString(fmt.Sprintf("**%s，实际成功%s %d 个**\n", formatPlanAction(p), actionWord, actualCount))
+			fmt.Fprintf(&sb, "**%s，实际成功%s %d 个**\n", formatPlanAction(p), actionWord, actualCount)
 		}
 
 		for _, ref := range r.CreatedInstances {
-			sb.WriteString(fmt.Sprintf("- 新增 %s %s\n", ref.GPUModel, ref.ID))
+			fmt.Fprintf(&sb, "- 新增 %s %s\n", ref.GPUModel, ref.ID)
 		}
 		for _, ref := range r.DestroyedInstances {
-			sb.WriteString(fmt.Sprintf("- 销毁 %s %s\n", ref.GPUModel, ref.ID))
+			fmt.Fprintf(&sb, "- 销毁 %s %s\n", ref.GPUModel, ref.ID)
 		}
 
 		if len(r.Errors) > 0 {
 			sb.WriteString("\n**⚠️ 错误**\n")
 			for _, e := range r.Errors {
-				sb.WriteString(fmt.Sprintf("- %s（%d 个）\n", e.Message, e.Count))
+				fmt.Fprintf(&sb, "- %s（%d 个）\n", e.Message, e.Count)
 			}
 		}
 
@@ -169,7 +169,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 					afterPreferred += c
 				}
 			}
-			sb.WriteString(fmt.Sprintf("\n**目前实例共 %d 个（含回退 %d）**\n", afterTotal, afterTotal-afterPreferred))
+			fmt.Fprintf(&sb, "\n**目前实例共 %d 个（含回退 %d）**\n", afterTotal, afterTotal-afterPreferred)
 			writeModelDist(&sb, afterDist)
 		}
 
