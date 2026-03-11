@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hnl1/xgydeploy/internal/config"
 	"github.com/hnl1/xgydeploy/internal/scheduler"
+	"github.com/hnl1/xgydeploy/internal/xgc"
 )
 
 func formatRule(rule config.ScheduleRule) string {
@@ -32,6 +34,22 @@ func formatBalance(balance float64) string {
 	return fmt.Sprintf("💰 账户余额：%.2f 元\n", balance)
 }
 
+func formatModelDetail(detail map[string]int) string {
+	if len(detail) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(detail))
+	for k := range detail {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s×%d", k, detail[k]))
+	}
+	return strings.Join(parts, " / ")
+}
+
 func buildPlanMessage(plans []scheduler.ActionPlan, timeStr string, balance float64) string {
 	var sb strings.Builder
 	sb.WriteString("## 【仙宫云调度】准备执行\n\n")
@@ -40,14 +58,19 @@ func buildPlanMessage(plans []scheduler.ActionPlan, timeStr string, balance floa
 
 	for _, p := range plans {
 		target := formatRule(p.Rule)
+		preferred := xgc.GPUModelShortName(p.DeployOpts.GPUModel)
 		sb.WriteString(fmt.Sprintf("### %s\n", p.ConfigKey))
 		sb.WriteString(fmt.Sprintf("- 规则：%s %s\n", p.Rule.Time, target))
-		sb.WriteString(fmt.Sprintf("- 当前实例：%d 个\n", p.Current))
+		sb.WriteString(fmt.Sprintf("- 首选型号：%s\n", preferred))
+		sb.WriteString(fmt.Sprintf("- 当前实例：%d 个（首选 %d / 回退 %d）\n", p.Current, p.PreferredCount, p.FallbackCount))
+		if len(p.FallbackDetail) > 0 {
+			sb.WriteString(fmt.Sprintf("- 回退分布：%s\n", formatModelDetail(p.FallbackDetail)))
+		}
 
 		switch p.Action {
 		case "create":
 			if p.Count > 0 {
-				sb.WriteString(fmt.Sprintf("- 📥 计划创建：%d 个\n", p.Count))
+				sb.WriteString(fmt.Sprintf("- 📥 计划创建：%d 个（允许回退）\n", p.Count))
 			} else {
 				sb.WriteString("- ✅ 无需操作，已满足要求\n")
 			}
@@ -59,6 +82,11 @@ func buildPlanMessage(plans []scheduler.ActionPlan, timeStr string, balance floa
 				}
 			} else {
 				sb.WriteString("- ✅ 无需操作，已满足要求\n")
+			}
+		case "replace":
+			sb.WriteString(fmt.Sprintf("- 🔄 计划替换：%d 个 → %s\n", p.Count, preferred))
+			for _, id := range p.DestroyIDs {
+				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
 			}
 		}
 		sb.WriteString("\n")
@@ -80,13 +108,22 @@ func buildResultMessage(results []scheduler.ActionResult, timeStr string, balanc
 		}
 		sb.WriteString(fmt.Sprintf("### %s | %s\n", r.ConfigKey, status))
 		sb.WriteString(fmt.Sprintf("- 规则：%s %s\n", r.Rule.Time, target))
+		if r.PlannedGPUModel != "" {
+			sb.WriteString(fmt.Sprintf("- 计划型号：%s\n", r.PlannedGPUModel))
+		}
 		sb.WriteString(fmt.Sprintf("- 操作前：%d 个\n", r.BeforeCount))
 		sb.WriteString(fmt.Sprintf("- 操作后：%d 个\n", r.AfterCount))
 		if len(r.Created) > 0 {
 			sb.WriteString(fmt.Sprintf("- 已创建：%d 个\n", len(r.Created)))
+			if len(r.ActualGPUModels) > 0 {
+				sb.WriteString(fmt.Sprintf("- 实际型号：%s\n", formatModelDetail(r.ActualGPUModels)))
+			}
 			for _, id := range r.Created {
 				sb.WriteString(fmt.Sprintf("  - `%s`\n", id))
 			}
+		}
+		if r.Replaced > 0 {
+			sb.WriteString(fmt.Sprintf("- 🔄 已替换：%d 个\n", r.Replaced))
 		}
 		if len(r.Destroyed) > 0 {
 			sb.WriteString(fmt.Sprintf("- 已销毁：%d 个\n", len(r.Destroyed)))

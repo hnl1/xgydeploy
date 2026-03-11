@@ -1,18 +1,11 @@
 # 仙宫云实例自动调度
-# 每天 09:00 和 22:00（北京时间）附近多次触发，防止 GitHub Actions cron 跳过
+# 每小时触发，检查实例数量和 GPU 型号是否满足规则
 name: 仙宫云调度
 
 on:
   schedule:
-    # 07:00 附近（北京）= 23:00 附近 UTC（前一天）
-    - cron: "3 23 * * *"
-    - cron: "17 23 * * *"
-    - cron: "38 23 * * *"
-    # 22:00 附近（北京）= 14:00 附近 UTC
-    - cron: "7 14 * * *"
-    - cron: "23 14 * * *"
-    - cron: "41 14 * * *"
-  workflow_dispatch:  # 支持手动触发
+    - cron: "13 * * * *"
+  workflow_dispatch:
 
 jobs:
   schedule:

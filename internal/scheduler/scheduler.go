@@ -21,28 +21,82 @@ var countedStatuses = map[string]bool{
 }
 
 type ActionPlan struct {
-	ConfigKey  string
-	ImageID    string
-	ImageName  string
-	Rule       config.ScheduleRule
-	Current    int
-	Action     string // "create" | "destroy"
-	Count      int
-	DestroyIDs []string
-	DeployOpts xgc.DeployOpts
+	ConfigKey      string
+	ImageID        string
+	ImageName      string
+	Rule           config.ScheduleRule
+	Current        int
+	PreferredCount int
+	FallbackCount  int
+	FallbackDetail map[string]int // 短型号名 → 数量
+	Action         string         // "create" | "destroy" | "replace"
+	AllowFallback  bool
+	Count          int
+	DestroyIDs     []string
+	DeployOpts     xgc.DeployOpts
 }
 
 type ActionResult struct {
-	ConfigKey   string
-	ImageID     string
-	ImageName   string
-	Rule        config.ScheduleRule
-	BeforeCount int
-	AfterCount  int
-	Created     []string
-	Destroyed   []string
-	Success bool
-	Errors  []ErrCount
+	ConfigKey       string
+	ImageID         string
+	ImageName       string
+	Rule            config.ScheduleRule
+	BeforeCount     int
+	AfterCount      int
+	Created         []string
+	Destroyed       []string
+	PlannedGPUModel string
+	ActualGPUModels map[string]int // 短型号名 → 数量
+	Replaced        int
+	Success         bool
+	Errors          []ErrCount
+}
+
+type instanceGroup struct {
+	preferred []map[string]any
+	fallback  []map[string]any
+	detail    map[string]int
+}
+
+// groupInstances 将属于指定 config 的实例按 GPU 型号分为首选和回退两组。
+// 回退组按回退优先级反序排列（最不优先的在前，方便按序销毁）。
+func groupInstances(instances []map[string]any, imageID, preferredModel string) instanceGroup {
+	shortPreferred := xgc.GPUModelShortName(preferredModel)
+	fallbackModels := xgc.GPUModelsToTry(preferredModel)
+
+	var preferred, fallback []map[string]any
+	detail := map[string]int{}
+
+	for _, inst := range instances {
+		status, _ := inst["status"].(string)
+		if !belongsToConfig(inst, imageID) || !countedStatuses[status] {
+			continue
+		}
+		gpuModel, _ := inst["gpu_model"].(string)
+		if gpuModel == shortPreferred {
+			preferred = append(preferred, inst)
+		} else {
+			fallback = append(fallback, inst)
+			detail[gpuModel]++
+		}
+	}
+
+	fallbackOrder := map[string]int{}
+	for i, m := range fallbackModels {
+		fallbackOrder[xgc.GPUModelShortName(m)] = i
+	}
+	sort.Slice(fallback, func(i, j int) bool {
+		gi, _ := fallback[i]["gpu_model"].(string)
+		gj, _ := fallback[j]["gpu_model"].(string)
+		oi := fallbackOrder[gi]
+		oj := fallbackOrder[gj]
+		if oi != oj {
+			return oi > oj
+		}
+		return getTimestamp(fallback[i]) < getTimestamp(fallback[j])
+	})
+
+	return instanceGroup{preferred: preferred, fallback: fallback, detail: detail}
 }
 
 func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now time.Time) ([]ActionPlan, error) {
@@ -72,47 +126,79 @@ func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now 
 		if rule == nil {
 			continue
 		}
-		mine := filterInstances(instances, cfg.ImageID)
+
+		group := groupInstances(instances, cfg.ImageID, cfg.GPUModel)
+		total := len(group.preferred) + len(group.fallback)
+
 		imageName := imageNames[cfg.ImageID]
 		configKey := imageName
 		if configKey == "" {
 			configKey = truncateConfigKey(cfg.ImageID)
 		}
-		log.Printf("[scheduler] 配置 #%d 匹配规则，当前实例数 %d", i+1, len(mine))
+		log.Printf("[scheduler] 配置 #%d 匹配规则，首选[%s] %d 台，回退 %d 台，共 %d 台",
+			i+1, xgc.GPUModelShortName(cfg.GPUModel), len(group.preferred), len(group.fallback), total)
 
-		plan := ActionPlan{
-			ConfigKey: configKey,
-			ImageID:   cfg.ImageID,
-			ImageName: imageName,
-			Rule:      *rule,
-			Current:   len(mine),
+		deployOpts := xgc.DeployOpts{
+			Image:        cfg.ImageID,
+			ImageType:    cfg.ImageType,
+			GPUModel:     cfg.GPUModel,
+			GPUCount:     cfg.GPUCount,
+			DataCenterID: cfg.DataCenterID,
+		}
+
+		basePlan := ActionPlan{
+			ConfigKey:      configKey,
+			ImageID:        cfg.ImageID,
+			ImageName:      imageName,
+			Rule:           *rule,
+			Current:        total,
+			PreferredCount: len(group.preferred),
+			FallbackCount:  len(group.fallback),
+			FallbackDetail: group.detail,
+			DeployOpts:     deployOpts,
 		}
 
 		if rule.MinCount != nil {
-			toCreate := *rule.MinCount - len(mine)
-			if toCreate < 0 {
-				toCreate = 0
-			}
-			plan.Action = "create"
-			plan.Count = toCreate
-			plan.DeployOpts = xgc.DeployOpts{
-				Image:        cfg.ImageID,
-				ImageType:    cfg.ImageType,
-				GPUModel:     cfg.GPUModel,
-				GPUCount:     cfg.GPUCount,
-				DataCenterID: cfg.DataCenterID,
+			if total < *rule.MinCount {
+				plan := basePlan
+				plan.Action = "create"
+				plan.Count = *rule.MinCount - total
+				plan.AllowFallback = true
+				plans = append(plans, plan)
+			} else if len(group.fallback) > 0 {
+				plan := basePlan
+				plan.Action = "replace"
+				plan.Count = len(group.fallback)
+				plan.AllowFallback = false
+				plan.DestroyIDs = instanceIDs(group.fallback)
+				plans = append(plans, plan)
+			} else {
+				plan := basePlan
+				plan.Action = "create"
+				plan.Count = 0
+				plans = append(plans, plan)
 			}
 		} else if rule.MaxCount != nil {
-			toDestroy := len(mine) - *rule.MaxCount
-			if toDestroy < 0 {
-				toDestroy = 0
+			if total > *rule.MaxCount {
+				plan := basePlan
+				plan.Action = "destroy"
+				plan.Count = total - *rule.MaxCount
+				plan.DestroyIDs = pickDestroyIDs(group, total-*rule.MaxCount)
+				plans = append(plans, plan)
+			} else if len(group.fallback) > 0 {
+				plan := basePlan
+				plan.Action = "replace"
+				plan.Count = len(group.fallback)
+				plan.AllowFallback = false
+				plan.DestroyIDs = instanceIDs(group.fallback)
+				plans = append(plans, plan)
+			} else {
+				plan := basePlan
+				plan.Action = "destroy"
+				plan.Count = 0
+				plans = append(plans, plan)
 			}
-			plan.Action = "destroy"
-			plan.Count = toDestroy
-			plan.DestroyIDs = pickOldestInstanceIDs(mine, toDestroy)
 		}
-
-		plans = append(plans, plan)
 	}
 	return plans, nil
 }
@@ -131,15 +217,18 @@ func Execute(client *xgc.Client, plans []ActionPlan) []ActionResult {
 				results[i] = executeCreate(client, plan)
 			case "destroy":
 				results[i] = executeDestroy(client, plan)
+			case "replace":
+				results[i] = executeReplace(client, plan)
 			default:
 				results[i] = ActionResult{
-					ConfigKey:   plan.ConfigKey,
-					ImageID:     plan.ImageID,
-					ImageName:   plan.ImageName,
-					Rule:        plan.Rule,
-					BeforeCount: plan.Current,
-					AfterCount:  plan.Current,
-					Success:     true,
+					ConfigKey:       plan.ConfigKey,
+					ImageID:         plan.ImageID,
+					ImageName:       plan.ImageName,
+					Rule:            plan.Rule,
+					BeforeCount:     plan.Current,
+					AfterCount:      plan.Current,
+					PlannedGPUModel: xgc.GPUModelShortName(plan.DeployOpts.GPUModel),
+					Success:         true,
 				}
 			}
 		}()
@@ -149,27 +238,36 @@ func Execute(client *xgc.Client, plans []ActionPlan) []ActionResult {
 }
 
 func executeCreate(client *xgc.Client, plan ActionPlan) ActionResult {
-	log.Printf("[scheduler] 开始创建 %d 个实例", plan.Count)
+	log.Printf("[scheduler] 开始创建 %d 个实例（允许回退=%v）", plan.Count, plan.AllowFallback)
 
-	created, errs := client.DeployAsync(plan.DeployOpts, plan.Count)
+	deployed, errs := client.DeployAsync(plan.DeployOpts, plan.Count, plan.AllowFallback)
 
-	verified := created
-	if len(created) > 0 {
-		log.Printf("[scheduler] 等待 %d 个实例启动完成...", len(created))
-		verified = client.WaitForRunning(created, 15*time.Second, 5*time.Minute)
-		log.Printf("[scheduler] 已启动: %d/%d", len(verified), len(created))
+	var newIDs []string
+	actualModels := map[string]int{}
+	for _, r := range deployed {
+		newIDs = append(newIDs, r.ID)
+		actualModels[xgc.GPUModelShortName(r.GPUModel)]++
+	}
+
+	verified := newIDs
+	if len(newIDs) > 0 {
+		log.Printf("[scheduler] 等待 %d 个实例启动完成...", len(newIDs))
+		verified = client.WaitForRunning(newIDs, 15*time.Second, 5*time.Minute)
+		log.Printf("[scheduler] 已启动: %d/%d", len(verified), len(newIDs))
 	}
 
 	return ActionResult{
-		ConfigKey:   plan.ConfigKey,
-		ImageID:     plan.ImageID,
-		ImageName:   plan.ImageName,
-		Rule:        plan.Rule,
-		BeforeCount: plan.Current,
-		AfterCount:  plan.Current + len(verified),
-		Created:     verified,
-		Success:     len(errs) == 0 && len(verified) == len(created),
-		Errors:      errCounts(errs),
+		ConfigKey:       plan.ConfigKey,
+		ImageID:         plan.ImageID,
+		ImageName:       plan.ImageName,
+		Rule:            plan.Rule,
+		BeforeCount:     plan.Current,
+		AfterCount:      plan.Current + len(verified),
+		Created:         verified,
+		PlannedGPUModel: xgc.GPUModelShortName(plan.DeployOpts.GPUModel),
+		ActualGPUModels: actualModels,
+		Success:         len(errs) == 0 && len(verified) == len(deployed),
+		Errors:          errCounts(errs),
 	}
 }
 
@@ -179,16 +277,95 @@ func executeDestroy(client *xgc.Client, plan ActionPlan) ActionResult {
 	destroyed, errs := client.DestroyAsync(plan.DestroyIDs)
 
 	return ActionResult{
-		ConfigKey:   plan.ConfigKey,
-		ImageID:     plan.ImageID,
-		ImageName:   plan.ImageName,
-		Rule:        plan.Rule,
-		BeforeCount: plan.Current,
-		AfterCount:  plan.Current - len(destroyed),
-		Destroyed:   destroyed,
-		Success:     len(errs) == 0,
-		Errors:      errCounts(errs),
+		ConfigKey:       plan.ConfigKey,
+		ImageID:         plan.ImageID,
+		ImageName:       plan.ImageName,
+		Rule:            plan.Rule,
+		BeforeCount:     plan.Current,
+		AfterCount:      plan.Current - len(destroyed),
+		Destroyed:       destroyed,
+		PlannedGPUModel: xgc.GPUModelShortName(plan.DeployOpts.GPUModel),
+		Success:         len(errs) == 0,
+		Errors:          errCounts(errs),
 	}
+}
+
+func executeReplace(client *xgc.Client, plan ActionPlan) ActionResult {
+	preferred := xgc.GPUModelShortName(plan.DeployOpts.GPUModel)
+	log.Printf("[scheduler] 开始替换 %d 个非[%s]实例", plan.Count, preferred)
+
+	deployed, errs := client.DeployAsync(plan.DeployOpts, plan.Count, false)
+
+	var newIDs []string
+	actualModels := map[string]int{}
+	for _, r := range deployed {
+		newIDs = append(newIDs, r.ID)
+		actualModels[xgc.GPUModelShortName(r.GPUModel)]++
+	}
+
+	verified := newIDs
+	if len(newIDs) > 0 {
+		log.Printf("[scheduler] 等待 %d 个替换实例启动完成...", len(newIDs))
+		verified = client.WaitForRunning(newIDs, 15*time.Second, 5*time.Minute)
+		log.Printf("[scheduler] 替换实例已启动: %d/%d", len(verified), len(newIDs))
+	}
+
+	toDestroy := plan.DestroyIDs
+	if len(toDestroy) > len(verified) {
+		toDestroy = toDestroy[:len(verified)]
+	}
+	var destroyed []string
+	if len(toDestroy) > 0 {
+		log.Printf("[scheduler] 销毁 %d 个被替换实例", len(toDestroy))
+		var destroyErrs []error
+		destroyed, destroyErrs = client.DestroyAsync(toDestroy)
+		for _, e := range destroyErrs {
+			errs = append(errs, e)
+		}
+	}
+
+	return ActionResult{
+		ConfigKey:       plan.ConfigKey,
+		ImageID:         plan.ImageID,
+		ImageName:       plan.ImageName,
+		Rule:            plan.Rule,
+		BeforeCount:     plan.Current,
+		AfterCount:      plan.Current + len(verified) - len(destroyed),
+		Created:         verified,
+		Destroyed:       destroyed,
+		PlannedGPUModel: preferred,
+		ActualGPUModels: actualModels,
+		Replaced:        len(destroyed),
+		Success:         len(errs) == 0,
+		Errors:          errCounts(errs),
+	}
+}
+
+func instanceIDs(instances []map[string]any) []string {
+	ids := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		if id, ok := inst["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// pickDestroyIDs 选择要销毁的实例：优先回退型号，然后最老的首选型号。
+func pickDestroyIDs(group instanceGroup, n int) []string {
+	var ids []string
+	for _, inst := range group.fallback {
+		if len(ids) >= n {
+			break
+		}
+		if id, ok := inst["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) < n {
+		ids = append(ids, pickOldestInstanceIDs(group.preferred, n-len(ids))...)
+	}
+	return ids
 }
 
 func truncateConfigKey(imageID string) string {
@@ -251,17 +428,6 @@ func belongsToConfig(inst map[string]any, imageID string) bool {
 	}
 	name, _ := inst["name"].(string)
 	return strings.HasPrefix(name, instanceNamePrefix(imageID))
-}
-
-func filterInstances(instances []map[string]any, imageID string) []map[string]any {
-	var result []map[string]any
-	for _, i := range instances {
-		status, _ := i["status"].(string)
-		if belongsToConfig(i, imageID) && countedStatuses[status] {
-			result = append(result, i)
-		}
-	}
-	return result
 }
 
 func getTimestamp(inst map[string]any) int64 {

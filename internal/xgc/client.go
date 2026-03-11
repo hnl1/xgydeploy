@@ -251,22 +251,72 @@ func (c *Client) WaitForRunning(instanceIDs []string, pollInterval, timeout time
 }
 
 const maxConcurrentDeploy = 3
-const gpuRetryAttempts = 5
+const gpuRetryPerModel = 3
 const gpuRetryMinInterval = 20 * time.Second
 const gpuRetryMaxInterval = 60 * time.Second
+
+// GPU 型号分为两个显存层级，每层级内有正常版和 D 版。
+// 回退规则：同层级另一版本 → 更高层级 D 版 → 更高层级正常版。
+// 48G 层级无更高层级可回退。
+var gpuTiers = [][]string{
+	{"NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 4090 D"},
+	{"NVIDIA GeForce RTX 4090 48G", "NVIDIA GeForce RTX 4090 D 48G"},
+}
+
+type DeployResult struct {
+	ID       string
+	GPUModel string
+}
+
+// GPUModelShortName 将 Deploy API 使用的全名转为 ListInstances 返回的短名。
+func GPUModelShortName(fullName string) string {
+	return strings.TrimPrefix(fullName, "NVIDIA GeForce ")
+}
+
+// GPUModelsToTry 根据首选型号构建有序回退列表。
+func GPUModelsToTry(primary string) []string {
+	tierIdx, posIdx := -1, -1
+	for t, tier := range gpuTiers {
+		for p, model := range tier {
+			if model == primary {
+				tierIdx, posIdx = t, p
+				break
+			}
+		}
+		if tierIdx >= 0 {
+			break
+		}
+	}
+	if tierIdx < 0 {
+		return []string{primary}
+	}
+
+	models := []string{primary}
+	// 同层级另一版本
+	sameTier := gpuTiers[tierIdx]
+	alt := sameTier[1-posIdx]
+	models = append(models, alt)
+	// 更高层级（D 版优先，再正常版）
+	for t := tierIdx + 1; t < len(gpuTiers); t++ {
+		higher := gpuTiers[t]
+		models = append(models, higher[1]) // D 版
+		models = append(models, higher[0]) // 正常版
+	}
+	return models
+}
 
 func gpuRetryDelay() time.Duration {
 	jitter := rand.Int63n(int64(gpuRetryMaxInterval - gpuRetryMinInterval))
 	return gpuRetryMinInterval + time.Duration(jitter)
 }
 
-// isGPUInsufficient 通过 msg 关键词判断是否为 GPU 不足。
-// 仙宫云无公开错误码表，且 code=1000 并非 GPU 不足专用，其他错误也会返回 1000。
-func isGPUInsufficient(err error) bool {
-	if ae, ok := err.(*APIError); ok {
-		return strings.Contains(ae.Msg, "可用GPU不足")
+// isGPUUnavailable 判断是否为 GPU 不可用（含"可用GPU不足"和"GPU型号暂时不可用"）。
+func isGPUUnavailable(err error) bool {
+	ae, ok := err.(*APIError)
+	if !ok {
+		return false
 	}
-	return false
+	return strings.Contains(ae.Msg, "可用GPU不足") || strings.Contains(ae.Msg, "GPU型号暂时不可用")
 }
 
 func toInt(v any) int {
@@ -281,12 +331,21 @@ func toInt(v any) int {
 	return 0
 }
 
-func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
+// DeployAsync 并发部署 count 个实例。
+// allowFallback=true 时按优先级尝试回退型号，每种型号最多重试 gpuRetryPerModel 次；
+// allowFallback=false 时仅尝试配置的型号。
+func (c *Client) DeployAsync(opts DeployOpts, count int, allowFallback bool) ([]DeployResult, []error) {
 	if count <= 0 {
 		return nil, nil
 	}
+
+	models := []string{opts.GPUModel}
+	if allowFallback {
+		models = GPUModelsToTry(opts.GPUModel)
+	}
+
 	var mu sync.Mutex
-	var created []string
+	var results []DeployResult
 	var errs []error
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrentDeploy)
@@ -301,30 +360,49 @@ func (c *Client) DeployAsync(opts DeployOpts, count int) ([]string, []error) {
 
 			var id string
 			var err error
-			for attempt := 0; attempt <= gpuRetryAttempts; attempt++ {
-				if attempt > 0 {
-					delay := gpuRetryDelay()
-					log.Printf("[xgc] 创建实例 %d/%d GPU不足，第 %d 次重试（等待 %v）...", i+1, count, attempt, delay.Round(time.Second))
-					time.Sleep(delay)
+			var usedModel string
+
+			for mi, model := range models {
+				tryOpts := opts
+				tryOpts.GPUModel = model
+				for attempt := 0; attempt < gpuRetryPerModel; attempt++ {
+					if mi > 0 || attempt > 0 {
+						delay := gpuRetryDelay()
+						log.Printf("[xgc] 实例 %d/%d 计划[%s] 尝试[%s] 第%d次重试（等待 %v）",
+							i+1, count, GPUModelShortName(opts.GPUModel), GPUModelShortName(model), attempt+1, delay.Round(time.Second))
+						time.Sleep(delay)
+					}
+					id, err = c.Deploy(tryOpts)
+					if err == nil {
+						usedModel = model
+						break
+					}
+					if !isGPUUnavailable(err) {
+						break
+					}
 				}
-				id, err = c.Deploy(opts)
-				if err == nil || !isGPUInsufficient(err) {
+				if err == nil || !isGPUUnavailable(err) {
 					break
 				}
 			}
+
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				errs = append(errs, err)
-				log.Printf("[xgc] 创建实例 %d/%d 失败: %v", i+1, count, err)
+				log.Printf("[xgc] 实例 %d/%d 计划[%s] 部署失败: %v", i+1, count, GPUModelShortName(opts.GPUModel), err)
 			} else {
-				created = append(created, id)
-				log.Printf("[xgc] 创建实例 %d/%d 成功", i+1, count)
+				results = append(results, DeployResult{ID: id, GPUModel: usedModel})
+				if usedModel == opts.GPUModel {
+					log.Printf("[xgc] 实例 %d/%d [%s] 部署成功", i+1, count, GPUModelShortName(usedModel))
+				} else {
+					log.Printf("[xgc] 实例 %d/%d 计划[%s] 实际[%s] 部署成功", i+1, count, GPUModelShortName(opts.GPUModel), GPUModelShortName(usedModel))
+				}
 			}
 		}()
 	}
 	wg.Wait()
-	return created, errs
+	return results, errs
 }
 
 func (c *Client) DestroyAsync(instanceIDs []string) ([]string, []error) {
