@@ -175,12 +175,12 @@ configs:
 - RTX 4090 D 48G × 2
 
 **🔄 计划替换 4 个，实际成功替换 3 个**
-- 新增 RTX 4090 vd5v1c0tc2jnvswc
-- 新增 RTX 4090 aohh8sigmc3mvqfs
-- 新增 RTX 4090 yedpd1bbljvokfc0
-- 销毁 RTX 4090 D 48G yq0c9p3r3v36q139
-- 销毁 RTX 4090 D 48G q0u3sk0327v5313b
-- 销毁 RTX 4090 D 401w3k433450313b
+- 新增 RTX 4090 m7k2x9hp4wqe3rcj
+- 新增 RTX 4090 f3nt8vbz6ydw2sla
+- 新增 RTX 4090 r5jc4mxq7hgw9enk
+- 销毁 RTX 4090 D 48G p8wa6skz3vtd1ycf
+- 销毁 RTX 4090 D 48G b2nd7ewq5xmt4hgj
+- 销毁 RTX 4090 D c9lf3arv8jn6pkm2
 
 **目前实例共 6 个（含回退 1）**
 - RTX 4090 × 5
@@ -204,9 +204,9 @@ configs:
 - RTX 4090 D × 1
 
 **📥 计划创建 3 个，实际成功创建 3 个**
-- 新增 RTX 4090 vd5v1c0tc2jnvswc
-- 新增 RTX 4090 aohh8sigmc3mvqfs
-- 新增 RTX 4090 D yedpd1bbljvokfc0
+- 新增 RTX 4090 m7k2x9hp4wqe3rcj
+- 新增 RTX 4090 f3nt8vbz6ydw2sla
+- 新增 RTX 4090 D r5jc4mxq7hgw9enk
 
 **目前实例共 6 个（含回退 2）**
 - RTX 4090 × 4
@@ -230,17 +230,13 @@ configs:
 - RTX 4090 D × 2
 
 **🗑️ 计划销毁 3 个，实际成功销毁 3 个**
-- 销毁 RTX 4090 D q0u3sk0327v5313b
-- 销毁 RTX 4090 D yq0c9p3r3v36q139
-- 销毁 RTX 4090 aohh8sigmc3mvqfs
+- 销毁 RTX 4090 D b2nd7ewq5xmt4hgj
+- 销毁 RTX 4090 D p8wa6skz3vtd1ycf
+- 销毁 RTX 4090 f3nt8vbz6ydw2sla
 
 **目前实例共 3 个（含回退 0）**
 - RTX 4090 × 3
 ```
-
-## 实例归属说明
-
-本工具通过**实例名称前缀** `xgydeploy-{镜像ID前8位}` 识别自己创建的实例。新建实例会自动带上该前缀。若仙宫云 API 返回实例的 `image`/`image_id` 字段，则也会按镜像 ID 匹配已有实例。
 
 ## 项目结构
 
@@ -248,18 +244,20 @@ configs:
 xgydeploy/
 ├── cmd/
 │   ├── xgydeploy/
-│   │   └── main.go      # 入口
+│   │   └── main.go         # 入口
 │   └── show-config/
-│       └── main.go      # 查看配置工具
+│       └── main.go         # 查看配置工具
 ├── internal/
-│   ├── config/          # 配置加载
-│   ├── xgc/             # 仙宫云 API 客户端（并发创建/销毁、GPU 型号回退）
-│   ├── scheduler/       # 调度逻辑（Plan + Execute、create/destroy/replace）
-│   └── notify/          # 钉钉通知（执行报告、型号分布）
+│   ├── config/             # 配置加载
+│   ├── xgc/                # 仙宫云 API 客户端（并发创建/销毁、GPU 型号回退）
+│   ├── scheduler/          # 调度逻辑（Plan + Execute、create/destroy/replace）
+│   └── notify/             # 钉钉通知（执行报告、型号分布）
 ├── configs/
 │   └── config.yaml
 ├── go.mod
 └── .github/workflows/
-    ├── schedule.yml      # 每小时调度
-    └── show-config.yml   # 查看配置
+    ├── schedule.yml        # 每小时调度
+    ├── show-config.yml     # 查看配置
+    ├── lint.yml            # golangci-lint
+    └── test.yml            # 单元测试
 ```

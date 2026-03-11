@@ -471,22 +471,9 @@ func errCounts(errs []error) []ErrCount {
 	return result
 }
 
-func instanceNamePrefix(imageID string) string {
-	if len(imageID) < 8 {
-		return "xgydeploy-" + imageID
-	}
-	return "xgydeploy-" + imageID[:8]
-}
-
 func belongsToConfig(inst map[string]any, imageID string) bool {
-	if img, ok := inst["image"].(string); ok && img == imageID {
-		return true
-	}
-	if img, ok := inst["image_id"].(string); ok && img == imageID {
-		return true
-	}
-	name, _ := inst["name"].(string)
-	return strings.HasPrefix(name, instanceNamePrefix(imageID))
+	img, _ := inst["image_id"].(string)
+	return img == imageID
 }
 
 func getTimestamp(inst map[string]any) int64 {

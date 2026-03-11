@@ -152,10 +152,8 @@ func TestBelongsToConfig(t *testing.T) {
 		inst map[string]any
 		want bool
 	}{
-		{"match by image field", map[string]any{"image": imageID}, true},
-		{"match by image_id field", map[string]any{"image_id": imageID}, true},
-		{"match by name prefix", map[string]any{"name": "xgydeploy-img-abc1"}, true},
-		{"no match", map[string]any{"image": "other", "name": "unrelated"}, false},
+		{"match by image_id", map[string]any{"image_id": imageID}, true},
+		{"no match", map[string]any{"image_id": "other"}, false},
 		{"empty instance", map[string]any{}, false},
 	}
 	for _, tt := range tests {
@@ -174,11 +172,11 @@ func TestGroupInstances(t *testing.T) {
 	preferredModel := "NVIDIA GeForce RTX 4090"
 
 	instances := []map[string]any{
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090 D", "id": "i2"},
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090", "id": "i3"},
-		{"image": imageID, "status": "stopped", "gpu_model": "RTX 4090", "id": "i4"},
-		{"image": "other-image", "status": "running", "gpu_model": "RTX 4090", "id": "i5"},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090 D", "id": "i2"},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090", "id": "i3"},
+		{"image_id": imageID, "status": "stopped", "gpu_model": "RTX 4090", "id": "i4"},
+		{"image_id": "other-image", "status": "running", "gpu_model": "RTX 4090", "id": "i5"},
 	}
 
 	group := groupInstances(instances, imageID, preferredModel)
@@ -198,13 +196,13 @@ func TestGroupInstancesFiltersStatuses(t *testing.T) {
 	imageID := "test-image"
 
 	instances := []map[string]any{
-		{"image": imageID, "status": "deploying", "gpu_model": "RTX 4090", "id": "i1"},
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090", "id": "i2"},
-		{"image": imageID, "status": "booting", "gpu_model": "RTX 4090", "id": "i3"},
-		{"image": imageID, "status": "shutting_down", "gpu_model": "RTX 4090", "id": "i4"},
-		{"image": imageID, "status": "shutdown", "gpu_model": "RTX 4090", "id": "i5"},
-		{"image": imageID, "status": "stopped", "gpu_model": "RTX 4090", "id": "i6"},
-		{"image": imageID, "status": "error", "gpu_model": "RTX 4090", "id": "i7"},
+		{"image_id": imageID, "status": "deploying", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090", "id": "i2"},
+		{"image_id": imageID, "status": "booting", "gpu_model": "RTX 4090", "id": "i3"},
+		{"image_id": imageID, "status": "shutting_down", "gpu_model": "RTX 4090", "id": "i4"},
+		{"image_id": imageID, "status": "shutdown", "gpu_model": "RTX 4090", "id": "i5"},
+		{"image_id": imageID, "status": "stopped", "gpu_model": "RTX 4090", "id": "i6"},
+		{"image_id": imageID, "status": "error", "gpu_model": "RTX 4090", "id": "i7"},
 	}
 
 	group := groupInstances(instances, imageID, "NVIDIA GeForce RTX 4090")
@@ -220,10 +218,10 @@ func TestGroupInstancesFallbackSortOrder(t *testing.T) {
 	preferredModel := "NVIDIA GeForce RTX 4090"
 
 	instances := []map[string]any{
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090 D", "id": "d1", "create_timestamp": float64(300)},
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090 D 48G", "id": "d48-1", "create_timestamp": float64(200)},
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090 D", "id": "d2", "create_timestamp": float64(100)},
-		{"image": imageID, "status": "running", "gpu_model": "RTX 4090 48G", "id": "n48-1", "create_timestamp": float64(150)},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090 D", "id": "d1", "create_timestamp": float64(300)},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090 D 48G", "id": "d48-1", "create_timestamp": float64(200)},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090 D", "id": "d2", "create_timestamp": float64(100)},
+		{"image_id": imageID, "status": "running", "gpu_model": "RTX 4090 48G", "id": "n48-1", "create_timestamp": float64(150)},
 	}
 
 	group := groupInstances(instances, imageID, preferredModel)
@@ -301,24 +299,6 @@ func TestTruncateConfigKey(t *testing.T) {
 	for _, tt := range tests {
 		if got := truncateConfigKey(tt.input); got != tt.want {
 			t.Errorf("truncateConfigKey(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-// --- instanceNamePrefix ---
-
-func TestInstanceNamePrefix(t *testing.T) {
-	tests := []struct {
-		imageID string
-		want    string
-	}{
-		{"abcdefghij", "xgydeploy-abcdefgh"},
-		{"short", "xgydeploy-short"},
-		{"12345678", "xgydeploy-12345678"},
-	}
-	for _, tt := range tests {
-		if got := instanceNamePrefix(tt.imageID); got != tt.want {
-			t.Errorf("instanceNamePrefix(%q) = %q, want %q", tt.imageID, got, tt.want)
 		}
 	}
 }
@@ -424,7 +404,7 @@ func makePlanClient(instances []map[string]any) *mockPlanClient {
 
 func TestPlanCreateWhenBelowMin(t *testing.T) {
 	client := makePlanClient([]map[string]any{
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
 	})
 	configs := []config.ConfigItem{{
 		ImageID:  "img-001",
@@ -456,9 +436,9 @@ func TestPlanCreateWhenBelowMin(t *testing.T) {
 
 func TestPlanReplaceWhenMinMetWithFallback(t *testing.T) {
 	client := makePlanClient([]map[string]any{
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i2"},
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090 D", "id": "i3"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i2"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090 D", "id": "i3"},
 	})
 	configs := []config.ConfigItem{{
 		ImageID:  "img-001",
@@ -493,8 +473,8 @@ func TestPlanReplaceWhenMinMetWithFallback(t *testing.T) {
 
 func TestPlanNoOpWhenMinMetNoFallback(t *testing.T) {
 	client := makePlanClient([]map[string]any{
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i2"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i2"},
 	})
 	configs := []config.ConfigItem{{
 		ImageID:  "img-001",
@@ -523,9 +503,9 @@ func TestPlanNoOpWhenMinMetNoFallback(t *testing.T) {
 
 func TestPlanDestroyWhenAboveMax(t *testing.T) {
 	client := makePlanClient([]map[string]any{
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1", "create_timestamp": float64(100)},
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i2", "create_timestamp": float64(200)},
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i3", "create_timestamp": float64(300)},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1", "create_timestamp": float64(100)},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i2", "create_timestamp": float64(200)},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i3", "create_timestamp": float64(300)},
 	})
 	configs := []config.ConfigItem{{
 		ImageID:  "img-001",
@@ -557,8 +537,8 @@ func TestPlanDestroyWhenAboveMax(t *testing.T) {
 
 func TestPlanReplaceWhenMaxMetWithFallback(t *testing.T) {
 	client := makePlanClient([]map[string]any{
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090 D", "id": "i2"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090 D", "id": "i2"},
 	})
 	configs := []config.ConfigItem{{
 		ImageID:  "img-001",
@@ -587,7 +567,7 @@ func TestPlanReplaceWhenMaxMetWithFallback(t *testing.T) {
 
 func TestPlanNoOpWhenMaxMetNoFallback(t *testing.T) {
 	client := makePlanClient([]map[string]any{
-		{"image": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
+		{"image_id": "img-001", "status": "running", "gpu_model": "RTX 4090", "id": "i1"},
 	})
 	configs := []config.ConfigItem{{
 		ImageID:  "img-001",
