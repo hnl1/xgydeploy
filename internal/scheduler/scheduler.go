@@ -188,7 +188,7 @@ func Plan(client *xgc.Client, configs []config.ConfigItem, timezone string, now 
 				plan := basePlan
 				plan.Action = "destroy"
 				plan.Count = total - *rule.MaxCount
-				plan.DestroyTargets = pickDestroyTargets(group, total-*rule.MaxCount)
+				plan.DestroyTargets = pickDestroyTargets(group, total-*rule.MaxCount, cfg.GPUModel)
 				plans = append(plans, plan)
 			} else if len(group.fallback) > 0 {
 				plan := basePlan
@@ -382,20 +382,35 @@ func instanceRefs(instances []map[string]any) []InstanceRef {
 	return refs
 }
 
-func pickDestroyTargets(group instanceGroup, n int) []InstanceRef {
-	var targets []InstanceRef
-	for _, inst := range group.fallback {
-		if len(targets) >= n {
-			break
+func pickDestroyTargets(group instanceGroup, n int, preferredModel string) []InstanceRef {
+	all := make([]map[string]any, 0, len(group.preferred)+len(group.fallback))
+	all = append(all, group.preferred...)
+	all = append(all, group.fallback...)
+
+	fallbackModels := xgc.GPUModelsToTry(preferredModel)
+	fallbackOrder := map[string]int{}
+	for i, m := range fallbackModels {
+		fallbackOrder[xgc.GPUModelShortName(m)] = i
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		gi, _ := all[i]["gpu_model"].(string)
+		gj, _ := all[j]["gpu_model"].(string)
+		oi := fallbackOrder[gi]
+		oj := fallbackOrder[gj]
+		if oi != oj {
+			return oi > oj
 		}
-		id, _ := inst["id"].(string)
-		model, _ := inst["gpu_model"].(string)
+		return getTimestamp(all[i]) < getTimestamp(all[j])
+	})
+
+	var targets []InstanceRef
+	for i := 0; i < n && i < len(all); i++ {
+		id, _ := all[i]["id"].(string)
+		model, _ := all[i]["gpu_model"].(string)
 		if id != "" {
 			targets = append(targets, InstanceRef{ID: id, GPUModel: model})
 		}
-	}
-	if len(targets) < n {
-		targets = append(targets, pickOldestRefs(group.preferred, n-len(targets))...)
 	}
 	return targets
 }
@@ -421,23 +436,6 @@ func truncateConfigKey(imageID string) string {
 		return imageID[:8]
 	}
 	return imageID
-}
-
-func pickOldestRefs(instances []map[string]any, n int) []InstanceRef {
-	sorted := make([]map[string]any, len(instances))
-	copy(sorted, instances)
-	sort.Slice(sorted, func(i, j int) bool {
-		return getTimestamp(sorted[i]) < getTimestamp(sorted[j])
-	})
-	var refs []InstanceRef
-	for i := 0; i < n && i < len(sorted); i++ {
-		id, _ := sorted[i]["id"].(string)
-		model, _ := sorted[i]["gpu_model"].(string)
-		if id != "" {
-			refs = append(refs, InstanceRef{ID: id, GPUModel: model})
-		}
-	}
-	return refs
 }
 
 type ErrCount struct {
