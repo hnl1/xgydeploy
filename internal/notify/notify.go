@@ -124,7 +124,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 			fmt.Fprintf(&sb, "**规则**：%s %s，首选 %s\n\n", p.Rule.Time, formatRule(p.Rule), preferred)
 
 			// 执行前实例
-			fmt.Fprintf(&sb, "**执行前实例共 %d 个（含回退 %d）**\n", p.Current, p.FallbackCount)
+			fmt.Fprintf(&sb, "**执行前实例共 %d 个（含备选型号 %d）**\n", p.Current, p.FallbackCount)
 			writeModelDist(&sb, beforeDist)
 			sb.WriteString("\n")
 
@@ -169,7 +169,7 @@ func buildResultMessage(plans []scheduler.ActionPlan, results []scheduler.Action
 					afterPreferred += c
 				}
 			}
-			fmt.Fprintf(&sb, "\n**目前实例共 %d 个（含回退 %d）**\n", afterTotal, afterTotal-afterPreferred)
+			fmt.Fprintf(&sb, "\n**目前实例共 %d 个（含备选型号 %d）**\n", afterTotal, afterTotal-afterPreferred)
 			writeModelDist(&sb, afterDist)
 		}
 

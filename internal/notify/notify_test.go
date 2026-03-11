@@ -234,7 +234,7 @@ func TestBuildResultMessageDestroy(t *testing.T) {
 		"old-3",
 		"20:00",
 		"最多 0 个",
-		"回退 1",
+		"备选型号 1",
 	}
 	for _, c := range checks {
 		if !strings.Contains(msg, c) {
