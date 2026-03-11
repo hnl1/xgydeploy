@@ -40,6 +40,8 @@ func New() (*Client, error) {
 	}, nil
 }
 
+const networkRetryAttempts = 3
+
 func (c *Client) request(method, path string, body any) (map[string]any, error) {
 	var reqBody []byte
 	if body != nil {
@@ -49,31 +51,42 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 			return nil, err
 		}
 	}
-	req, err := http.NewRequest(method, baseURL+path, bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", c.token)
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close() //nolint:errcheck
+	var lastErr error
+	for attempt := 1; attempt <= networkRetryAttempts; attempt++ {
+		req, err := http.NewRequest(method, baseURL+path, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", c.token)
+		req.Header.Set("Content-Type", "application/json")
 
-	if resp.StatusCode >= 400 {
-		log.Printf("[xgc] API 请求失败: %s %s -> %s", method, path, resp.Status)
-		return nil, fmt.Errorf("API 错误: %s", resp.Status)
+		resp, err := c.client.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < networkRetryAttempts {
+				log.Printf("[xgc] 请求 %s %s 网络错误 (%d/%d): %v，重试中...", method, path, attempt, networkRetryAttempts, err)
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+				continue
+			}
+			return nil, lastErr
+		}
+		defer resp.Body.Close() //nolint:errcheck
+
+		if resp.StatusCode >= 400 {
+			log.Printf("[xgc] API 请求失败: %s %s -> %s", method, path, resp.Status)
+			return nil, fmt.Errorf("API 错误: %s", resp.Status)
+		}
+		if resp.ContentLength == 0 {
+			return nil, nil
+		}
+		var data map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+			return nil, err
+		}
+		return data, nil
 	}
-	if resp.ContentLength == 0 {
-		return nil, nil
-	}
-	var data map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return nil, lastErr
 }
 
 func (c *Client) ListInstances() ([]map[string]any, error) {
