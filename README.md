@@ -3,11 +3,13 @@
 [![lint](https://github.com/hnl1/xgydeploy/actions/workflows/lint.yml/badge.svg)](https://github.com/hnl1/xgydeploy/actions/workflows/lint.yml)
 [![test](https://github.com/hnl1/xgydeploy/actions/workflows/test.yml/badge.svg)](https://github.com/hnl1/xgydeploy/actions/workflows/test.yml)
 
-根据配置的时间与数量限制，自动创建/销毁仙宫云 GPU 实例，支持多份配置、GPU 型号智能回退、钉钉通知、GitHub Actions 部署。
+根据配置的时间与数量限制，自动创建/销毁仙宫云 GPU 实例，支持多份配置、GPU 型号智能回退、钉钉通知、GitHub Actions 调度。
+
+需要实际运行时，请先按下文配置 Secrets 和调度规则，再启用 GitHub Actions 的 `schedule`。
 
 ## 功能
 
-- **每小时调度**：每小时检查实例数量和 GPU 型号，创建、销毁或替换以达到目标
+- **定时调度**：按 GitHub Actions `schedule` 检查实例数量和 GPU 型号，创建、销毁或替换以达到目标
 - **GPU 型号回退**：GPU 不足时按优先级自动尝试备选型号
 - **自动替换**：实例数量满足但存在回退型号时，尝试部署首选型号并替换回退实例
 - **钉钉通知**：仅在需要操作时发送执行报告（含计划情况和实际执行结果），无需操作时不打扰
@@ -80,7 +82,7 @@ configs:
 
 ## 部署方式
 
-### 方式一：GitHub Actions（推荐，无需自建服务器）
+### 方式一：GitHub Actions（无需自建服务器）
 
 1. **Fork 或创建仓库**（私有/公开均可）
 2. **配置 Secrets**（仓库 Settings → Secrets and variables → Actions → Secrets）：
@@ -88,8 +90,9 @@ configs:
    - `XGC_CONFIG`：完整 YAML 配置（含镜像 ID、时间、数量等）
    - `DINGTALK_WEBHOOK`：钉钉群机器人 Webhook URL（可选）
    - `DINGTALK_SECRET`：钉钉机器人加签密钥（若启用加签则必填）
-3. **定时运行**：工作流每小时执行一次（第 13 分钟），检查数量和 GPU 型号
-4. **查看配置**：手动触发「查看配置」workflow，将当前 `XGC_CONFIG` 发送到钉钉，方便编辑前查看
+3. **启用定时调度**：默认只保留手动触发；如需定时运行，取消 `.github/workflows/schedule.yml` 中 `schedule` 的注释，并按需调整 cron 表达式
+4. **手动执行调度**：在 GitHub Actions 中手动触发「仙宫云调度」workflow，可先验证 Secrets 和配置是否正确
+5. **查看配置**：手动触发「查看配置」workflow，将当前 `XGC_CONFIG` 发送到钉钉，方便编辑前查看
 
 **XGC_CONFIG 示例**（复制到 Secrets 的 Value，多行粘贴即可）：
 ```yaml
@@ -256,7 +259,7 @@ xgydeploy/
 │   └── config.yaml
 ├── go.mod
 └── .github/workflows/
-    ├── schedule.yml        # 每小时调度
+    ├── schedule.yml        # 调度 workflow，默认仅手动触发，可按需启用 schedule
     ├── show-config.yml     # 查看配置
     ├── lint.yml            # golangci-lint
     └── test.yml            # 单元测试

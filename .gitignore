@@ -3,3 +3,4 @@
 .env
 *.local.yaml
 configs/*.local.yaml
+.vscode/settings.json

@@ -3,8 +3,10 @@
 name: 仙宫云调度
 
 on:
-  schedule:
-    - cron: "13 * * * *"
+  # 如需实际使用，请先配置 XGC_API_TOKEN、XGC_CONFIG、DINGTALK_WEBHOOK、DINGTALK_SECRET，
+  # 再取消下面 schedule 配置的注释，并按需调整 cron 表达式。
+  # schedule:
+  #   - cron: "13 * * * *"
   workflow_dispatch:
 
 jobs:
